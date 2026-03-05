@@ -262,18 +262,123 @@ button:active {
   opacity: 0;
 }
 
-/* slide-up 动画 */
-.slide-up-enter-active,
-.slide-up-leave-active {
-  transition: all var(--transition-slow);
+/* === 路由/页面切换核心动画 === */
+
+/* 1. 标准侧滑转场 (用于收件箱等主视图) */
+.route-slide-enter-active,
+.route-slide-leave-active {
+  transition: all 0.45s cubic-bezier(0.3, 0.8, 0.3, 1);
 }
 
-.slide-up-enter-from {
+.route-slide-enter-from {
   opacity: 0;
-  transform: translateY(20px);
+  transform: translateX(30px);
 }
 
-.slide-up-leave-to {
+.route-slide-leave-to {
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateX(-30px);
+}
+
+/* 2. 写信专用弹起转场 (Compose Mail) */
+.route-compose-enter-active,
+.route-compose-leave-active {
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.route-compose-enter-from {
+  opacity: 0;
+  transform: translateY(60px) scale(0.98);
+}
+
+.route-compose-leave-to {
+  opacity: 0;
+  transform: translateY(20px) scale(0.98);
+}
+
+/* 3. 设置专用缩放转场 (Settings) */
+.route-settings-enter-active,
+.route-settings-leave-active {
+  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.route-settings-enter-from {
+  opacity: 0;
+  transform: scale(1.05);
+}
+
+.route-settings-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+/* 4. 邮件详情侧滑 (Content) */
+.content-slide-enter-active {
+  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.content-slide-leave-active {
+  transition: all 0.3s ease-in;
+}
+
+.content-slide-enter-from {
+  opacity: 0;
+  transform: translateX(40px);
+}
+
+.content-slide-leave-to {
+  opacity: 0;
+  transform: translateX(10px);
+}
+
+/* 列表移动动画 (Vue TransitionGroup) */
+.list-move,
+.list-enter-active,
+.list-leave-active {
+  transition: all 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.list-enter-from,
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+}
+
+.list-leave-active {
+  position: absolute;
+  width: 100%;
+}
+
+/* 5. 阶梯式进入动画 (用于初始化列表) */
+@keyframes staggerFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.stagger-item {
+  animation: staggerFadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i) * 0.05s);
+}
+
+/* 6. 设置面板内部切换动画 */
+.settings-fade-enter-active,
+.settings-fade-leave-active {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.settings-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.settings-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }

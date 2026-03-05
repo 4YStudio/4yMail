@@ -429,4 +429,15 @@ function sanitizeHtml(html) {
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.pulse-text {
+  animation: pulse 1.5s ease-in-out infinite;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
 </style>

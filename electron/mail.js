@@ -3,8 +3,9 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 
 export class MailService {
-    constructor(config) {
+    constructor(config, onError = null) {
         this.config = config;
+        this.onError = onError;
         this.client = null;
     }
 
@@ -17,7 +18,24 @@ export class MailService {
                 user: this.config.user,
                 pass: this.config.pass,
             },
+            tls: {
+                // 解决某些服务器（如 QQ、某些企业邮）可能存在的证书校验或旧加密协议导致的 BAD_DECRYPT 错误
+                rejectUnauthorized: false
+            },
             logger: false,
+        });
+
+        // 关键：挂载错误监听器，防止未处理的异步错误导致主进程崩溃
+        this.client.on('error', (err) => {
+            console.error(`IMAP Client Error (${this.config.user}):`, err.message || err);
+            if (this.onError) {
+                this.onError(err);
+            }
+            // 发生严重错误时，建议手动断开并置空，避免重试死循环
+            if (this.client) {
+                this.client.logout().catch(() => { });
+                this.client = null;
+            }
         });
 
         await this.client.connect();
@@ -170,6 +188,36 @@ export class MailService {
         }
     }
 
+    async markSeen(folder, uid) {
+        if (!this.client) throw new Error('Not connected');
+        const lock = await this.client.getMailboxLock(folder);
+        try {
+            await this.client.messageFlagsAdd(uid.toString(), ['\\Seen'], { uid: true });
+        } finally {
+            lock.release();
+        }
+    }
+
+    async markUnseen(folder, uid) {
+        if (!this.client) throw new Error('Not connected');
+        const lock = await this.client.getMailboxLock(folder);
+        try {
+            await this.client.messageFlagsRemove(uid.toString(), ['\\Seen'], { uid: true });
+        } finally {
+            lock.release();
+        }
+    }
+
+    async appendMessage(folder, content, flags = []) {
+        if (!this.client) throw new Error('Not connected');
+        try {
+            await this.client.append(folder, content, flags);
+        } catch (error) {
+            console.error('Append error:', error);
+            throw error;
+        }
+    }
+
     static async sendMail(smtpConfig, mailOptions) {
         const transporter = nodemailer.createTransport({
             host: smtpConfig.host,
@@ -179,7 +227,12 @@ export class MailService {
                 user: smtpConfig.user,
                 pass: smtpConfig.pass,
             },
+            tls: {
+                rejectUnauthorized: false
+            }
         });
+
+        console.log(`Attempting to send mail from ${smtpConfig.user} via ${smtpConfig.host}:${smtpConfig.port}`);
 
         await transporter.sendMail({
             from: mailOptions.from,
@@ -188,6 +241,7 @@ export class MailService {
             subject: mailOptions.subject,
             text: mailOptions.text,
             html: mailOptions.html,
+            attachments: mailOptions.attachments || [],
         });
     }
 }

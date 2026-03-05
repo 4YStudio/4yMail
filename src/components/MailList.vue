@@ -45,31 +45,86 @@
         </svg>
         <span>没有邮件</span>
       </div>
-      <div
-        v-for="mail in filteredMails"
-        :key="mail.uid"
-        class="mail-item"
-        :class="{ selected: selectedMail === mail.uid, unread: !mail.seen }"
-        @click="$emit('select', mail.uid)"
-      >
-        <div class="mail-avatar" :style="{ background: getAvatarColor(mail.from.address) }">
-          {{ getInitial(mail.from.name) }}
-        </div>
-        <div class="mail-info">
-          <div class="mail-top">
-            <span class="mail-sender" :class="{ 'font-bold': !mail.seen }">{{ mail.from.name }}</span>
-            <span class="mail-time">{{ formatTime(mail.date) }}</span>
+      <TransitionGroup name="list" tag="div" class="mail-items-container">
+        <div
+          v-for="(mail, index) in filteredMails"
+          :key="mail.uid"
+          class="mail-item stagger-item"
+          :class="{ selected: selectedMail === mail.uid, unread: !mail.seen }"
+          :style="{ '--i': index }"
+          @click="$emit('select', mail)"
+          @contextmenu.prevent="openContext($event, mail)"
+        >
+          <div class="mail-avatar" :style="{ background: getAvatarColor(mail.from.address) }">
+            {{ getInitial(mail.from.name) }}
           </div>
-          <div class="mail-subject" :class="{ 'font-bold': !mail.seen }">{{ mail.subject }}</div>
+          <div class="mail-info">
+            <div class="mail-top">
+              <span class="mail-sender">{{ mail.from.name || mail.from.address }}</span>
+              <span class="mail-time">{{ formatTime(mail.date) }}</span>
+            </div>
+            <div class="mail-subject" :class="{ 'font-bold': !mail.seen }">{{ mail.subject }}</div>
+            <div v-if="mail.accountId" class="acc-label">{{ mail.accountId }}</div>
+          </div>
+          <div v-if="!mail.seen" class="unread-dot"></div>
         </div>
-        <div v-if="!mail.seen" class="unread-dot"></div>
-      </div>
+      </TransitionGroup>
     </div>
+
+    <!-- 右键菜单 -->
+    <teleport to="body">
+      <transition name="ctx-pop">
+        <div
+          v-if="showContext"
+          class="context-menu"
+          :style="{ left: contextPos.x + 'px', top: contextPos.y + 'px' }"
+          ref="ctxMenuRef"
+        >
+          <div class="ctx-item" @click="ctxAction('toggleRead')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path v-if="contextMail?.seen" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/>
+              <circle v-if="contextMail?.seen" cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+              <path v-if="!contextMail?.seen" d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" stroke="currentColor" stroke-width="1.5"/>
+              <path v-if="!contextMail?.seen" d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>{{ contextMail?.seen ? '标记为未读' : '标记为已读' }}</span>
+          </div>
+          <div class="ctx-item" @click="ctxAction('reply')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M9 17l-5-5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M4 12h12a4 4 0 014 4v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>回复</span>
+          </div>
+          <div class="ctx-divider"></div>
+          <div class="ctx-item" @click="ctxAction('moveTrash')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <span>移至垃圾箱</span>
+          </div>
+          <div class="ctx-item danger" @click="ctxAction('delete')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <span>彻底删除</span>
+          </div>
+          <div class="ctx-divider"></div>
+          <div class="ctx-item" @click="ctxAction('copyAddr')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            <span>复制发件人地址</span>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   mails: Array,
@@ -79,9 +134,74 @@ const props = defineProps({
   folders: Array,
 })
 
-defineEmits(['select', 'refresh', 'changeFolder'])
+const emit = defineEmits(['select', 'refresh', 'changeFolder', 'markRead', 'markUnread', 'reply', 'delete', 'moveTrash', 'copyAddr'])
 
 const searchQuery = ref('')
+const showContext = ref(false)
+const contextMail = ref(null)
+const contextPos = ref({ x: 0, y: 0 })
+const ctxMenuRef = ref(null)
+
+function openContext(event, mail) {
+  // 先关闭已有菜单
+  showContext.value = false
+  contextMail.value = mail
+  // 确保菜单不超出屏幕
+  const menuW = 200, menuH = 260
+  let x = event.clientX
+  let y = event.clientY
+  if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8
+  if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 8
+  contextPos.value = { x, y }
+  // 使用 nextTick 延迟，避免与全局 click 事件冲突
+  requestAnimationFrame(() => {
+    showContext.value = true
+  })
+}
+
+function ctxAction(action) {
+  if (!contextMail.value) return
+  const mail = contextMail.value
+  switch (action) {
+    case 'toggleRead':
+      if (mail.seen) {
+        emit('markUnread', mail)
+      } else {
+        emit('markRead', mail)
+      }
+      break
+    case 'reply':
+      emit('select', mail)
+      // 稍微延迟以确保邮件先加载
+      setTimeout(() => emit('reply', mail), 100)
+      break
+    case 'delete':
+      emit('delete', mail)
+      break
+    case 'moveTrash':
+      emit('moveTrash', mail)
+      break
+    case 'copyAddr':
+      emit('copyAddr', mail)
+      break
+  }
+  showContext.value = false
+}
+
+function closeContext(e) {
+  if (showContext.value && ctxMenuRef.value && !ctxMenuRef.value.contains(e.target)) {
+    showContext.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', closeContext)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', closeContext)
+})
+
 
 const filteredMails = computed(() => {
   if (!searchQuery.value.trim()) return props.mails || []
@@ -362,5 +482,103 @@ function formatTime(dateStr) {
   border-radius: 50%;
   background: var(--primary);
   flex-shrink: 0;
+}
+
+.acc-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+:root[data-theme="light"] .acc-label {
+  color: var(--primary);
+}
+</style>
+
+<style>
+/* 右键菜单 - 使用全局样式因为 teleport 到 body */
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  padding: 6px;
+  background: rgba(30, 30, 50, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="light"] .context-menu {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+:root[data-theme="light"] .ctx-item {
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.ctx-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+:root[data-theme="light"] .ctx-item:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.ctx-item.danger {
+  color: #ff6b6b;
+}
+
+.ctx-item.danger:hover {
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.ctx-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 8px;
+}
+
+:root[data-theme="light"] .ctx-divider {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* 右键菜单动画 */
+.ctx-pop-enter-active {
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ctx-pop-leave-active {
+  transition: all 0.15s ease-in;
+}
+
+.ctx-pop-enter-from {
+  opacity: 0;
+  transform: scale(0.8) translateY(-10px);
+}
+
+.ctx-pop-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.mail-items-container {
+  position: relative;
+  width: 100%;
 }
 </style>

@@ -1,0 +1,279 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ===== 深色模式（默认）- 浅绿色主题 ===== */
+:root {
+  /* 液态玻璃色彩系统 - 半透明无模糊 */
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-bg-hover: rgba(255, 255, 255, 0.10);
+  --glass-bg-active: rgba(255, 255, 255, 0.14);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-light: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+
+  /* 主题色 - 浅绿色 */
+  --primary: #00b894;
+  --primary-light: #55efc4;
+  --primary-dark: #00a381;
+  --accent: #00cec9;
+  --accent-light: #81ecec;
+
+  /* 文字色 */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.60);
+  --text-tertiary: rgba(255, 255, 255, 0.38);
+  --text-inverse: #1a1a2e;
+
+  /* 语义色 */
+  --danger: #ff6b6b;
+  --warning: #feca57;
+  --success: #55efc4;
+  --info: #74b9ff;
+  --unread: #55efc4;
+
+  /* 背景 */
+  --bg-base: #0f0f1a;
+  --bg-gradient-1: #1a1a2e;
+  --bg-gradient-2: #16213e;
+  --bg-gradient-3: #0f3460;
+  --bg-titlebar: rgba(15, 15, 26, 0.6);
+  --bg-sidenav: rgba(15, 15, 26, 0.4);
+  --bg-maillist: rgba(255, 255, 255, 0.03);
+
+  /* 尺寸 */
+  --sidebar-width: 64px;
+  --maillist-width: 340px;
+  --titlebar-height: 38px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* 过渡 */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 控件色 */
+  --ctrl-close-hover: rgba(255, 60, 60, 0.8);
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --select-bg: #1a1a2e;
+}
+
+/* ===== 浅色模式 - 蓝色主题 ===== */
+:root[data-theme="light"] {
+  --glass-bg: rgba(0, 0, 0, 0.04);
+  --glass-bg-hover: rgba(0, 0, 0, 0.07);
+  --glass-bg-active: rgba(0, 0, 0, 0.10);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-border-light: rgba(0, 0, 0, 0.12);
+  --glass-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+
+  /* 主题色 - 蓝色 */
+  --primary: #0984e3;
+  --primary-light: #74b9ff;
+  --primary-dark: #0768b8;
+  --accent: #6c5ce7;
+  --accent-light: #a29bfe;
+
+  /* 文字色 */
+  --text-primary: rgba(0, 0, 0, 0.88);
+  --text-secondary: rgba(0, 0, 0, 0.55);
+  --text-tertiary: rgba(0, 0, 0, 0.35);
+  --text-inverse: #ffffff;
+
+  /* 语义色 */
+  --danger: #d63031;
+  --warning: #e17055;
+  --success: #00b894;
+  --info: #0984e3;
+  --unread: #0984e3;
+
+  /* 背景 */
+  --bg-base: #f0f2f5;
+  --bg-gradient-1: #e8ecf1;
+  --bg-gradient-2: #dfe6ed;
+  --bg-gradient-3: #d5dde5;
+  --bg-titlebar: rgba(255, 255, 255, 0.75);
+  --bg-sidenav: rgba(255, 255, 255, 0.55);
+  --bg-maillist: rgba(255, 255, 255, 0.45);
+
+  /* 控件色 */
+  --ctrl-close-hover: rgba(255, 60, 60, 0.85);
+  --input-bg: rgba(0, 0, 0, 0.04);
+  --select-bg: #ffffff;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  transition: background var(--transition-normal), color var(--transition-normal);
+}
+
+/* 动态渐变背景 */
+#app {
+  background:
+    radial-gradient(ellipse at 20% 80%, rgba(0, 184, 148, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(0, 206, 201, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(15, 52, 96, 0.2) 0%, transparent 70%),
+    linear-gradient(135deg, var(--bg-base) 0%, var(--bg-gradient-1) 50%, var(--bg-gradient-2) 100%);
+}
+
+:root[data-theme="light"] #app {
+  background:
+    radial-gradient(ellipse at 20% 80%, rgba(9, 132, 227, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(108, 92, 231, 0.04) 0%, transparent 50%),
+    linear-gradient(135deg, var(--bg-base) 0%, var(--bg-gradient-1) 50%, var(--bg-gradient-2) 100%);
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+:root[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+/* 通用液态玻璃面板 */
+.glass-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+}
+
+.glass-panel-raised {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-shadow);
+}
+
+/* 可选文字 */
+.selectable {
+  user-select: text;
+}
+
+/* 输入框基础样式 */
+input,
+textarea {
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--transition-fast), background var(--transition-normal), color var(--transition-normal);
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--primary-light);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* 按钮基础样式 */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+button:active {
+  transform: scale(0.96);
+}
+
+/* 液态玻璃按钮 */
+.btn-glass {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-glass:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--glass-border-light);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+/* fade 动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-normal);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* slide-up 动画 */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: all var(--transition-slow);
+}
+
+.slide-up-enter-from {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}

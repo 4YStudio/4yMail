@@ -374,3 +374,17 @@ ipcMain.handle('dialog-open-files', async () => {
   });
   return result;
 });
+
+// App settings
+ipcMain.handle('app-set-autostart', (event, openAtLogin) => {
+  app.setLoginItemSettings({
+    openAtLogin: openAtLogin,
+    path: app.getPath('exe'),
+  });
+  return { success: true };
+});
+
+ipcMain.handle('app-get-autostart', () => {
+  const settings = app.getLoginItemSettings();
+  return { success: true, enabled: settings.openAtLogin };
+});

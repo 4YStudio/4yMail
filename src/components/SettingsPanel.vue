@@ -17,13 +17,16 @@
           通用设置
         </button>
       </div>
-      <button v-if="currentTab === 'accounts' && !editingAccount" class="btn-primary small" @click="handleCreateNew">添加账号</button>
-      <button v-if="editingAccount" class="btn-glass btn-icon" @click="editingAccount = null">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        返回列表
-      </button>
+      <div class="header-right-actions">
+        <button v-if="currentTab === 'accounts' && !editingAccount" class="btn-primary small" @click="handleCreateNew">添加账号</button>
+        <button v-if="editingAccount" class="btn-glass btn-icon" @click="editingAccount = null">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          返回列表
+        </button>
+        <WindowControls />
+      </div>
     </div>
 
     <div class="settings-body">
@@ -37,7 +40,7 @@
             v-for="acc in accounts" 
             :key="acc.id" 
             class="account-card"
-            @click="editingAccount = { ...acc }"
+            @click="editingAccount = { ...acc }; isEditing = true; originalId = acc.id"
           >
             <div class="acc-info">
               <div class="acc-avatar">{{ acc.id[0].toUpperCase() }}</div>
@@ -47,9 +50,22 @@
               </div>
             </div>
             <div class="acc-status">
-              <span class="status-badge" :class="{ online: acc.connected }">
-                {{ acc.connected ? '已连接' : '未连接' }}
+              <span class="status-badge" :class="{ 
+                online: acc.connected && !connectingIds.includes(acc.id),
+                busy: connectingIds.includes(acc.id)
+              }">
+                {{ connectingIds.includes(acc.id) ? '连接中...' : (acc.connected ? '已连接' : '未连接') }}
               </span>
+              <button 
+                v-if="!connectingIds.includes(acc.id)"
+                class="btn-icon-only" 
+                title="重连"
+                @click.stop="$emit('reconnect', acc.id)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                 <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
@@ -59,7 +75,6 @@
 
         <!-- 账号编辑/新增视图 -->
         <div v-else-if="currentTab === 'accounts' && editingAccount" key="acc-form" class="account-form">
-          <!-- 快捷预设 -->
           <div class="settings-section">
             <h4 class="section-title">快捷配置预设</h4>
             <div class="preset-grid">
@@ -93,15 +108,26 @@
                 </div>
                 <div class="field small">
                   <label>安全连接</label>
-                  <select v-model="editingAccount.imap.secure" class="select-field">
-                    <option :value="true">SSL / TLS</option>
-                    <option :value="false">STARTTLS / 无</option>
-                  </select>
+                  <GlassSelect 
+                    v-model="editingAccount.imap.secure"
+                    :options="secureOptions"
+                  />
                 </div>
               </div>
               <div class="field">
                 <label>密码 / 授权码</label>
-                <input v-model="editingAccount.imap.pass" type="password" placeholder="密码或授权码" />
+                <div class="input-with-icon">
+                  <input :type="showImapPass ? 'text' : 'password'" v-model="editingAccount.imap.pass" placeholder="密码或授权码" />
+                  <button class="eye-btn" @click="showImapPass = !showImapPass">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" v-if="showImapPass">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2"/>
+                      <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" v-else>
+                      <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 011.82-3.22M1 1l22 22M6.78 6.78A10.07 10.07 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M15 15a3 3 0 11-4.24-4.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -123,10 +149,10 @@
                 </div>
                 <div class="field small">
                   <label>安全连接</label>
-                  <select v-model="editingAccount.smtp.secure" class="select-field">
-                    <option :value="true">SSL / TLS</option>
-                    <option :value="false">STARTTLS / 无</option>
-                  </select>
+                  <GlassSelect 
+                    v-model="editingAccount.smtp.secure"
+                    :options="secureOptions"
+                  />
                 </div>
               </div>
               <div class="field">
@@ -135,14 +161,27 @@
               </div>
               <div class="field">
                 <label>密码 / 授权码</label>
-                <input v-model="editingAccount.smtp.pass" type="password" placeholder="授权码" />
+                <div class="input-with-icon">
+                  <input :type="showSmtpPass ? 'text' : 'password'" v-model="editingAccount.smtp.pass" placeholder="授权码" />
+                  <button class="eye-btn" @click="showSmtpPass = !showSmtpPass">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" v-if="showSmtpPass">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2"/>
+                      <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" v-else>
+                      <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 011.82-3.22M1 1l22 22M6.78 6.78A10.07 10.07 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M15 15a3 3 0 11-4.24-4.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
           <div class="settings-actions">
-            <button class="btn-primary" @click="handleAction">{{ isNew ? '添加并连接' : '保存修改' }}</button>
-            <button v-if="!isNew" class="btn-glass danger-text" @click="handleDelete">删除账号</button>
+            <button class="btn-primary" :disabled="connectingIds.includes(editingAccount.id)" @click="handleAction">
+              {{ connectingIds.includes(editingAccount.id) ? '正在连接...' : (!isEditing ? '添加并连接' : '保存并重连') }}
+            </button>
+            <button v-if="isEditing" class="btn-glass danger-text" @click="handleDelete">删除账号</button>
           </div>
         </div>
 
@@ -164,6 +203,39 @@
                   <span class="hint">建议设定在 1-10 分钟之间</span>
                 </div>
               </div>
+
+              <div class="field">
+                <label>界面整体缩放 ({{ zoomLevel }}%)</label>
+                <div class="input-with-hint">
+                  <div class="slider-row">
+                    <input 
+                      type="range" 
+                      :value="zoomLevel" 
+                      min="25" 
+                      max="400" 
+                      step="5"
+                      @input="$emit('updateZoom', parseInt($event.target.value))"
+                      class="zoom-slider"
+                    />
+                    <button class="btn-text" @click="$emit('updateZoom', 100)">重置</button>
+                  </div>
+                  <span class="hint">调整界面整体显示大小 (25% - 400%)，重置为 100% 恢复默认</span>
+                </div>
+              </div>
+
+              <div class="field checkbox-field">
+                <div class="checkbox-container" @click="$emit('updateAutoStart', !autoStart)">
+                  <div class="custom-checkbox" :class="{ checked: autoStart }">
+                    <svg v-if="autoStart" width="10" height="10" viewBox="0 0 24 24" fill="none">
+                      <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div class="checkbox-label">
+                    <span>开机自启动</span>
+                    <span class="hint">开启后，应用将在系统启动时自动运行</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -174,24 +246,38 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import GlassSelect from './GlassSelect.vue'
+import WindowControls from './WindowControls.vue'
+
+const secureOptions = [
+  { label: 'SSL / TLS', value: true },
+  { label: 'STARTTLS / 无', value: false }
+]
 
 const props = defineProps({
   accounts: Array,
   pollingInterval: Number,
+  zoomLevel: Number,
+  autoStart: Boolean,
+  connectingIds: {
+    type: Array,
+    default: () => []
+  }
 })
 
-const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval'])
+const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval', 'updateZoom', 'updateAutoStart', 'reconnect'])
 
 const currentTab = ref('accounts')
 const editingAccount = ref(null)
+const isEditing = ref(false)
 const localInterval = ref(props.pollingInterval)
+const showImapPass = ref(false)
+const showSmtpPass = ref(false)
+let originalId = ''
 
-const isNew = computed(() => {
-  if (!editingAccount.value) return false
-  return !props.accounts.find(a => a.id === editingAccount.value.id)
-})
 
 function handleCreateNew() {
+  isEditing.value = false
   editingAccount.value = {
     id: '',
     imap: { host: '', port: 993, secure: true, user: '', pass: '' },
@@ -203,10 +289,10 @@ function handleCreateNew() {
 function handleAction() {
   if (!editingAccount.value.imap.user) return
   editingAccount.value.id = editingAccount.value.imap.user
-  if (isNew.value) {
+  if (!isEditing.value) {
     emit('addAccount', JSON.parse(JSON.stringify(editingAccount.value)))
   } else {
-    emit('updateAccount', JSON.parse(JSON.stringify(editingAccount.value)))
+    emit('updateAccount', originalId, JSON.parse(JSON.stringify(editingAccount.value)))
   }
   editingAccount.value = null
 }
@@ -283,6 +369,21 @@ function syncSmtp() {
   height: 100%;
 }
 
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 12px 24px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+
+.header-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .settings-tabs {
   display: flex;
   gap: 16px;
@@ -314,7 +415,26 @@ function syncSmtp() {
   border-bottom-color: var(--primary);
 }
 
-/* 账号列表 */
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.settings-section {
+  margin-bottom: 28px;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .accounts-list {
   display: flex;
   flex-direction: column;
@@ -394,67 +514,62 @@ function syncSmtp() {
   color: var(--success);
 }
 
-/* 输入框提示 */
-.input-with-hint {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.status-badge.busy {
+  background: rgba(253, 203, 110, 0.15);
+  color: var(--warning);
 }
 
-.hint {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.btn-icon {
+.input-with-icon {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
 }
 
-.empty-state {
-  padding: 40px;
-  text-align: center;
-  color: var(--text-tertiary);
-  background: var(--glass-bg);
-  border: 1px dashed var(--glass-border);
-  border-radius: var(--radius-lg);
-}
-
-/* 原有样式保持 */
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 24px;
-  border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0;
-}
-
-.settings-body {
+.input-with-icon input {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px 24px;
+  padding-right: 40px !important;
 }
 
-.settings-section {
-  margin-bottom: 28px;
-}
-
-.section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
+.eye-btn {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  transition: color 0.2s;
+}
+
+.eye-btn:hover {
+  color: var(--primary-light);
+}
+
+.btn-icon-only {
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.btn-icon-only:hover {
+  background: var(--glass-bg-hover);
+  color: var(--primary-light);
 }
 
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 10px;
 }
 
 .preset-btn {
@@ -471,22 +586,27 @@ function syncSmtp() {
   transition: all var(--transition-fast);
 }
 
+.preset-btn:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--primary);
+}
+
 .field-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .field-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
 .field {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .field.small {
@@ -500,7 +620,7 @@ function syncSmtp() {
 }
 
 .field input {
-  padding: 9px 12px;
+  padding: 10px 12px;
   background: var(--input-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
@@ -511,15 +631,103 @@ function syncSmtp() {
 
 .field input:focus {
   border-color: var(--primary);
+  outline: none;
+}
+
+.input-with-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.zoom-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  background: var(--glass-bg);
+  height: 6px;
+  border-radius: 3px;
+  outline: none;
+}
+
+.zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+
+.checkbox-field {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.checkbox-container {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.custom-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid var(--glass-border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.custom-checkbox.checked {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.checkbox-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.checkbox-label span:first-child {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 12px;
+  padding-top: 12px;
 }
 
 .btn-text {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   color: var(--primary-light);
-  padding: 2px 8px;
+  padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 12px;
   transition: all 0.2s;
 }
 
@@ -528,25 +736,19 @@ function syncSmtp() {
   border-color: var(--primary);
 }
 
-.select-field {
-  padding: 8px 10px;
-  background: var(--input-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-}
-
-.select-field option {
-  background: var(--bg-card);
-  color: var(--text-primary);
-}
-
-.settings-actions {
+.btn-icon {
   display: flex;
-  gap: 10px;
-  padding-top: 8px;
+  align-items: center;
+  gap: 6px;
+}
+
+.empty-state {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-tertiary);
+  background: var(--glass-bg);
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-lg);
 }
 
 .danger-text {

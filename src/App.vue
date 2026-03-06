@@ -1,6 +1,6 @@
 <template>
   <div class="app-container">
-    <TitleBar />
+    <div class="window-drag-region"></div>
     <div class="app-body">
       <SideNav
         :activeView="currentView"
@@ -16,7 +16,13 @@
             :key="'settings'"
             :accounts="accounts"
             :pollingInterval="pollingInterval"
+            :zoomLevel="zoomLevel"
+            :autoStart="autoStart"
+            :connectingIds="Array.from(connectingIds)"
             @updateInterval="val => pollingInterval = val"
+            @updateZoom="val => zoomLevel = val"
+            @updateAutoStart="val => autoStart = val"
+            @reconnect="handleConnect"
             @addAccount="onAddAccount"
             @updateAccount="onUpdateAccount"
             @deleteAccount="onDeleteAccount"
@@ -77,7 +83,6 @@
 
 <script setup>
 import { ref, reactive, onMounted, computed, watch } from 'vue'
-import TitleBar from './components/TitleBar.vue'
 import SideNav from './components/SideNav.vue'
 import MailList from './components/MailList.vue'
 import MailContent from './components/MailContent.vue'
@@ -100,6 +105,9 @@ const replyToMail = ref(null)
 const accounts = ref([]) // { id, imap, smtp, connected, folders: [] }
 const currentAccountId = ref('unified') // 'unified' 或具体的 email 地址
 const pollingInterval = ref(5)
+const zoomLevel = ref(100) // 100%
+const autoStart = ref(false)
+const connectingIds = ref(new Set())
 
 // 当前选中账号的对象
 const currentAccount = computed(() => {
@@ -155,8 +163,18 @@ onMounted(async () => {
     try {
       const settings = JSON.parse(savedSettings)
       pollingInterval.value = settings.pollingInterval || 5
-      if (isElectron) window.electronAPI.updatePollingInterval(pollingInterval.value)
+      zoomLevel.value = settings.zoomLevel || 100
+      if (isElectron) {
+        window.electronAPI.updatePollingInterval(pollingInterval.value)
+        window.electronAPI.setZoomFactor(zoomLevel.value / 100)
+      }
     } catch {}
+  }
+
+  // 初始化自启动状态
+  if (isElectron) {
+    const asRes = await window.electronAPI.getAutostart()
+    if (asRes.success) autoStart.value = asRes.enabled
   }
 
   // 监听来自主进程的连接异常
@@ -198,9 +216,25 @@ watch(accounts, (newVal) => {
 }, { deep: true })
 
 watch(pollingInterval, (newVal) => {
-  localStorage.setItem('4ymail-settings', JSON.stringify({ pollingInterval: newVal }))
+  saveSettings()
   if (isElectron) window.electronAPI.updatePollingInterval(newVal)
 })
+
+watch(zoomLevel, (newVal) => {
+  saveSettings()
+  if (isElectron) window.electronAPI.setZoomFactor(newVal / 100)
+})
+
+watch(autoStart, (newVal) => {
+  if (isElectron) window.electronAPI.setAutostart(newVal)
+})
+
+function saveSettings() {
+  localStorage.setItem('4ymail-settings', JSON.stringify({
+    pollingInterval: pollingInterval.value,
+    zoomLevel: zoomLevel.value
+  }))
+}
 
 // 切换账号时自动加载文件夹和邮件
 watch(currentAccountId, async (newId) => {
@@ -220,6 +254,7 @@ watch(currentAccountId, async (newId) => {
     currentFolder.value = 'INBOX'
   }
   if (connected.value) {
+    mails.value = [] // 切换账号时清空
     await handleRefresh()
   }
 })
@@ -237,6 +272,7 @@ function handleSwitchFolder(folder) {
   currentFolder.value = targetFolder
   selectedMailUid.value = null
   currentMailDetail.value = null
+  mails.value = [] // 切换文件夹时清空
   if (connected.value) {
     handleRefresh()
   }
@@ -313,11 +349,14 @@ function onAddAccount(acc) {
   handleConnect(acc.id)
 }
 
-function onUpdateAccount(acc) {
-  const idx = accounts.value.findIndex(a => a.id === acc.id)
+function onUpdateAccount(oldId, acc) {
+  const idx = accounts.value.findIndex(a => a.id === oldId)
   if (idx !== -1) {
     accounts.value[idx] = { ...accounts.value[idx], ...acc }
     handleConnect(acc.id)
+    if (oldId !== acc.id && currentAccountId.value === oldId) {
+      currentAccountId.value = acc.id
+    }
   }
 }
 
@@ -338,7 +377,10 @@ async function handleConnect(accountId) {
   const acc = accounts.value.find(a => a.id === accountId)
   if (!acc) return
 
+  if (connectingIds.value.has(accountId)) return // 已经在连接中
+
   try {
+    connectingIds.value.add(accountId)
     loadingList.value = true
     const res = await window.electronAPI.connect({
       imap: toPlain(acc.imap),
@@ -365,6 +407,7 @@ async function handleConnect(accountId) {
   } catch (err) {
     showNotif(`连接失败: ${err.message}`, 'error')
   } finally {
+    connectingIds.value.delete(accountId)
     loadingList.value = false
   }
 }
@@ -665,6 +708,18 @@ function handleMailSent() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+.window-drag-region {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  -webkit-app-region: drag;
+  pointer-events: none;
+  z-index: 999;
 }
 
 .app-body {

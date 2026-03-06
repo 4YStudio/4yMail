@@ -26,4 +26,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openFileDialog: () => ipcRenderer.invoke('dialog-open-files'),
     onConnectionError: (callback) => ipcRenderer.on('mail-connection-error', (_event, value) => callback(value)),
     onNewMailArrived: (callback) => ipcRenderer.on('mail-new-arrived', (_event, value) => callback(value)),
+
+    // App settings
+    setZoomFactor: (factor) => {
+        const { webFrame } = require('electron');
+        webFrame.setZoomFactor(factor);
+    },
+    getAutostart: () => ipcRenderer.invoke('app-get-autostart'),
+    setAutostart: (enable) => ipcRenderer.invoke('app-set-autostart', enable),
 });

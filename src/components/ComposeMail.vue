@@ -1,12 +1,14 @@
 <template>
   <div class="compose-panel stagger-in">
     <div class="compose-header">
-      <button class="back-btn" @click="$emit('back')">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-      <h3 class="compose-title">{{ replyTo ? '回复邮件' : '写新邮件' }}</h3>
+      <div class="header-left">
+        <button class="back-btn" @click="$emit('back')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <h3 class="compose-title">{{ replyTo ? '回复邮件' : '写新邮件' }}</h3>
+      </div>
       
       <div class="header-actions">
         <button class="btn-glass" @click="handleSaveDraft" :disabled="sending || savingDraft">
@@ -26,6 +28,8 @@
           <div v-if="sending" class="btn-spinner"></div>
           {{ sending ? '发送中' : '发送' }}
         </button>
+        <div class="divider"></div>
+        <WindowControls />
       </div>
     </div>
 
@@ -100,7 +104,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import WindowControls from './WindowControls.vue'
 
 const props = defineProps({
   accountConfig: Object,
@@ -291,16 +296,30 @@ async function sendMail() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: 12px 0 12px 24px;
   border-bottom: 1px solid var(--glass-border);
   background: var(--glass-bg);
   backdrop-filter: blur(10px);
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+.header-actions .divider {
+  width: 1px;
+  height: 20px;
+  background: var(--glass-border);
+  margin: 0 4px;
 }
 
 .back-btn {

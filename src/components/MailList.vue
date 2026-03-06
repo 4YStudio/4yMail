@@ -14,16 +14,13 @@
         />
       </div>
       <div class="maillist-toolbar">
-        <select
+        <GlassSelect
           v-if="folders.length"
-          class="folder-select"
-          :value="currentFolder"
-          @change="$emit('changeFolder', ($event.target).value)"
-        >
-          <option v-for="f in folders" :key="f.path" :value="f.path">
-            {{ getFolderName(f) }}
-          </option>
-        </select>
+          :modelValue="currentFolder"
+          :options="folderOptions"
+          @update:modelValue="val => $emit('changeFolder', val)"
+          style="flex: 1"
+        />
         <button class="toolbar-btn" @click="$emit('refresh')" title="刷新">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" :class="{ spinning: loading }">
             <path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -45,7 +42,7 @@
         </svg>
         <span>没有邮件</span>
       </div>
-      <TransitionGroup name="list" tag="div" class="mail-items-container">
+      <TransitionGroup v-if="!loading" name="list" tag="div" class="mail-items-container">
         <div
           v-for="(mail, index) in filteredMails"
           :key="mail.uid"
@@ -125,6 +122,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import GlassSelect from './GlassSelect.vue'
 
 const props = defineProps({
   mails: Array,
@@ -202,6 +200,12 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', closeContext)
 })
 
+const folderOptions = computed(() => {
+  return props.folders.map(f => ({
+    label: getFolderName(f),
+    value: f.path
+  }))
+})
 
 const filteredMails = computed(() => {
   if (!searchQuery.value.trim()) return props.mails || []

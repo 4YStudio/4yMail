@@ -1,5 +1,7 @@
 <template>
   <div class="mailcontent">
+    <WindowControls class="main-window-controls" />
+
     <!-- 空状态 -->
     <div v-if="!mail && !loading" class="mailcontent-empty">
       <div class="empty-icon">
@@ -96,6 +98,8 @@
 </template>
 
 <script setup>
+import WindowControls from './WindowControls.vue'
+
 const props = defineProps({
   mail: Object,
   loading: Boolean,
@@ -165,6 +169,14 @@ function sanitizeHtml(html) {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  position: relative;
+}
+
+.main-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 100;
 }
 
 .mailcontent-empty {

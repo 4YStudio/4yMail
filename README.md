@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./assets/logo.png" alt="4yMail Logo" width="120" height="120" />
+  <img src="./public/logo.png" alt="4yMail Logo" width="120" height="120" />
   <h1>4yMail</h1>
   <p><strong>A Modern, Elegant, and High-Performance Desktop Email Client</strong></p>
   <p><strong>一款现代、优雅、高性能的桌面邮件客户端</strong></p>

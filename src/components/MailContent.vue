@@ -176,7 +176,7 @@ function sanitizeHtml(html) {
   position: absolute;
   top: 0;
   right: 0;
-  z-index: 100;
+  z-index: 1000;
 }
 
 .mailcontent-empty {
@@ -227,7 +227,7 @@ function sanitizeHtml(html) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 20px 24px 12px;
+  padding: 40px 24px 12px; /* 增加顶距以避开窗口控制按钮 */
   gap: 16px;
   flex-shrink: 0;
 }

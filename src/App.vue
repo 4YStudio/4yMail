@@ -718,8 +718,7 @@ function handleMailSent() {
   right: 0;
   height: 32px;
   -webkit-app-region: drag;
-  pointer-events: none;
-  z-index: 999;
+  z-index: 10;
 }
 
 .app-body {

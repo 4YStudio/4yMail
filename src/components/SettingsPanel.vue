@@ -1,5 +1,6 @@
 <template>
   <div class="settings-panel">
+    <WindowControls class="settings-window-controls" />
     <div class="settings-header">
       <div class="settings-tabs">
         <button 
@@ -25,7 +26,6 @@
           </svg>
           返回列表
         </button>
-        <WindowControls />
       </div>
     </div>
 
@@ -367,13 +367,21 @@ function syncSmtp() {
   flex-direction: column;
   overflow: hidden;
   height: 100%;
+  position: relative;
+}
+
+.settings-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1000;
 }
 
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 0 12px 24px;
+  padding: 40px 24px 12px;
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
 }

@@ -1,5 +1,6 @@
 <template>
   <div class="compose-panel stagger-in">
+    <WindowControls class="compose-window-controls" />
     <div class="compose-header">
       <div class="header-left">
         <button class="back-btn" @click="$emit('back')">
@@ -28,8 +29,6 @@
           <div v-if="sending" class="btn-spinner"></div>
           {{ sending ? '发送中' : '发送' }}
         </button>
-        <div class="divider"></div>
-        <WindowControls />
       </div>
     </div>
 
@@ -290,13 +289,21 @@ async function sendMail() {
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-main);
+  position: relative;
+}
+
+.compose-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1000;
 }
 
 .compose-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 0 12px 24px;
+  padding: 40px 24px 12px;
   border-bottom: 1px solid var(--glass-border);
   background: var(--glass-bg);
   backdrop-filter: blur(10px);

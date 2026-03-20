@@ -8,7 +8,7 @@
             <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <h3 class="compose-title">{{ replyTo ? '回复邮件' : '写新邮件' }}</h3>
+        <h3 class="compose-title">{{ composeTitle }}</h3>
       </div>
       
       <div class="header-actions">
@@ -103,7 +103,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import WindowControls from './WindowControls.vue'
 
 const props = defineProps({
@@ -128,10 +128,19 @@ const mailData = reactive({
 
 onMounted(() => {
   if (props.replyTo) {
-    mailData.to = props.replyTo.from?.address || ''
-    mailData.subject = 'Re: ' + (props.replyTo.subject || '')
-    const originalContent = props.replyTo.html || props.replyTo.text || ''
-    mailData.body = `<br><br><div class="gmail_quote">--- 原始邮件 ---<br>${originalContent}</div>`
+    if (props.replyTo.isForward) {
+      // 转发模式
+      mailData.to = ''
+      mailData.subject = 'Fwd: ' + (props.replyTo.subject || '')
+      const originalContent = props.replyTo.html || props.replyTo.text || ''
+      mailData.body = `<br><br><div class="gmail_quote">---------- 转发的邮件 ----------<br>发件人: ${props.replyTo.from?.name || ''} &lt;${props.replyTo.from?.address || ''}&gt;<br>日期: ${props.replyTo.date || ''}<br>主题: ${props.replyTo.subject || ''}<br><br>${originalContent}</div>`
+    } else {
+      // 回复模式
+      mailData.to = props.replyTo.from?.address || ''
+      mailData.subject = 'Re: ' + (props.replyTo.subject || '')
+      const originalContent = props.replyTo.html || props.replyTo.text || ''
+      mailData.body = `<br><br><div class="gmail_quote">--- 原始邮件 ---<br>${originalContent}</div>`
+    }
     
     if (editorRef.value) {
       editorRef.value.innerHTML = mailData.body
@@ -144,6 +153,12 @@ onMounted(() => {
       editorRef.value.focus()
     }
   })
+})
+
+const composeTitle = computed(() => {
+  if (props.replyTo?.isForward) return '转发邮件'
+  if (props.replyTo) return '回复邮件'
+  return '写新邮件'
 })
 
 function updateBody() {

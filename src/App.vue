@@ -18,10 +18,12 @@
             :pollingInterval="pollingInterval"
             :zoomLevel="zoomLevel"
             :autoStart="autoStart"
+            :dynamicMailTheme="dynamicMailTheme"
             :connectingIds="Array.from(connectingIds)"
             @updateInterval="val => pollingInterval = val"
             @updateZoom="val => zoomLevel = val"
             @updateAutoStart="val => autoStart = val"
+            @updateDynamicMailTheme="val => dynamicMailTheme = val"
             @reconnect="handleConnect"
             @addAccount="onAddAccount"
             @updateAccount="onUpdateAccount"
@@ -61,9 +63,14 @@
                 :key="selectedMailUid"
                 :mail="currentMailDetail"
                 :loading="loadingDetail"
+                :dynamicMailTheme="dynamicMailTheme"
                 @reply="handleReply"
                 @delete="handleDelete"
                 @compose="currentView = 'compose'; replyToMail = null;"
+                @markRead="handleMarkReadFromContent"
+                @markUnread="handleMarkUnreadFromContent"
+                @moveTrash="handleMoveTrashFromContent"
+                @forward="handleForward"
               />
             </Transition>
           </div>
@@ -107,6 +114,7 @@ const currentAccountId = ref('unified') // 'unified' 或具体的 email 地址
 const pollingInterval = ref(5)
 const zoomLevel = ref(100) // 100%
 const autoStart = ref(false)
+const dynamicMailTheme = ref(true)
 const connectingIds = ref(new Set())
 
 // 当前选中账号的对象
@@ -164,6 +172,7 @@ onMounted(async () => {
       const settings = JSON.parse(savedSettings)
       pollingInterval.value = settings.pollingInterval || 5
       zoomLevel.value = settings.zoomLevel || 100
+      dynamicMailTheme.value = settings.dynamicMailTheme !== undefined ? settings.dynamicMailTheme : true
       if (isElectron) {
         window.electronAPI.updatePollingInterval(pollingInterval.value)
         window.electronAPI.setZoomFactor(zoomLevel.value / 100)
@@ -225,14 +234,25 @@ watch(zoomLevel, (newVal) => {
   if (isElectron) window.electronAPI.setZoomFactor(newVal / 100)
 })
 
-watch(autoStart, (newVal) => {
-  if (isElectron) window.electronAPI.setAutostart(newVal)
+watch(dynamicMailTheme, () => {
+  saveSettings()
+})
+
+watch(autoStart, async (newVal) => {
+  if (isElectron) {
+    try {
+      await window.electronAPI.setAutostart(newVal)
+    } catch (err) {
+      console.error('Set autostart failed:', err)
+    }
+  }
 })
 
 function saveSettings() {
   localStorage.setItem('4ymail-settings', JSON.stringify({
     pollingInterval: pollingInterval.value,
-    zoomLevel: zoomLevel.value
+    zoomLevel: zoomLevel.value,
+    dynamicMailTheme: dynamicMailTheme.value
   }))
 }
 
@@ -547,6 +567,75 @@ async function handleSelectMail(mail) {
 function handleReply(mail) {
   replyToMail.value = mail
   currentView.value = 'compose'
+}
+
+function handleForward(mail) {
+  // 转发：设置 replyToMail 但标记为转发模式
+  replyToMail.value = { ...mail, isForward: true }
+  currentView.value = 'compose'
+}
+
+// 从邮件详情页标记已读
+async function handleMarkReadFromContent(mail) {
+  if (!isElectron || !mail) return
+  const accountId = mail.accountId || currentAccountId.value
+  if (accountId === 'unified') return
+  const acc = accounts.value.find(a => a.id === accountId)
+  const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+  try {
+    const res = await window.electronAPI.markSeen({ accountId, folder, uid: mail.uid })
+    if (res.success) {
+      const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
+      if (idx !== -1) mails.value[idx].seen = true
+      if (currentMailDetail.value) currentMailDetail.value.seen = true
+      showNotif('已标记为已读', 'success')
+    }
+  } catch (err) {
+    showNotif('操作失败: ' + err.message, 'error')
+  }
+}
+
+// 从邮件详情页标记未读
+async function handleMarkUnreadFromContent(mail) {
+  if (!isElectron || !mail) return
+  const accountId = mail.accountId || currentAccountId.value
+  if (accountId === 'unified') return
+  const acc = accounts.value.find(a => a.id === accountId)
+  const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+  try {
+    const res = await window.electronAPI.markUnseen({ accountId, folder, uid: mail.uid })
+    if (res.success) {
+      const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
+      if (idx !== -1) mails.value[idx].seen = false
+      if (currentMailDetail.value) currentMailDetail.value.seen = false
+      showNotif('已标记为未读', 'success')
+    }
+  } catch (err) {
+    showNotif('操作失败: ' + err.message, 'error')
+  }
+}
+
+// 从邮件详情页移至垃圾箱
+async function handleMoveTrashFromContent(mail) {
+  if (!isElectron || !mail) return
+  const accountId = mail.accountId || currentAccountId.value
+  if (accountId === 'unified') return
+  const acc = accounts.value.find(a => a.id === accountId)
+  const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+  const trashFolder = resolveFolder('Deleted Messages', acc?.folders || [])
+  try {
+    const res = await window.electronAPI.moveMail({ accountId, folder, uid: mail.uid, destination: trashFolder })
+    if (res.success) {
+      mails.value = mails.value.filter(m => !(m.uid === mail.uid && m.accountId === accountId))
+      selectedMailUid.value = null
+      currentMailDetail.value = null
+      showNotif('已移至垃圾箱', 'success')
+    } else {
+      showNotif('移动失败: ' + res.error, 'error')
+    }
+  } catch (err) {
+    showNotif('移动失败: ' + err.message, 'error')
+  }
 }
 
 // === 右键菜单处理函数 ===

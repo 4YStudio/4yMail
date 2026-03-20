@@ -1,7 +1,9 @@
-import { app, BrowserWindow, ipcMain, shell, nativeImage, Tray, Menu, Notification, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, nativeImage, Tray, Menu, Notification, dialog, clipboard } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import fs from 'fs';
+import os from 'os';
 import { MailService } from './mail.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -9,7 +11,9 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow;
 let tray;
-// 改为 Map 管理多个账号的服务实例: Map<accountId, MailService>
+// 记录是否是开机自启动
+let isAutoStart = false;
+// Map 管理多个账号的服务实例：Map<accountId, MailService>
 const mailServices = new Map();
 // 记录每个账号最后一次检查到的最大 UID: Map<accountId, number>
 const lastMaxUids = new Map();
@@ -19,7 +23,7 @@ let isQuitting = false;
 
 const isDev = process.env.NODE_ENV === 'development';
 
-function createWindow() {
+function createWindow(showWindow = true) {
   const iconPath = isDev
     ? path.join(__dirname, '../public/logo.png')
     : path.join(__dirname, '../dist/logo.png');
@@ -33,6 +37,7 @@ function createWindow() {
     transparent: false,
     backgroundColor: '#0f0f1a',
     icon: iconPath,
+    show: showWindow, // 控制是否显示窗口
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -55,6 +60,25 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Handle external links (target="_blank")
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('mailto:')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Handle same-window navigation to external links
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // Only intercept if it's an external HTTP/HTTPS link, 
+    // avoiding intercepting local file:// or dev server localhost
+    const isLocalhost = isDev && url.startsWith('http://localhost:5173');
+    if (!isLocalhost && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('mailto:'))) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
   });
 }
 
@@ -179,7 +203,27 @@ async function checkNewEmails(accountId, service) {
 }
 
 app.whenReady().then(() => {
-  createWindow();
+  // 检测是否是开机自启动
+  let shouldCheckAutostart = false;
+  
+  if (process.platform === 'win32') {
+    // Windows: 通过命令行参数判断
+    // 如果设置了开机自启动，Electron 会以 --hidden 或静默方式启动
+    shouldCheckAutostart = true;
+    isAutoStart = process.argv.some(arg => 
+      arg.includes('--hidden') || 
+      arg.includes('--silent') || 
+      arg.includes('--minimized')
+    );
+  } else if (process.platform === 'linux') {
+    // Linux: 通过环境变量或参数判断
+    shouldCheckAutostart = true;
+    isAutoStart = process.env.STARTUP_NOTIFICATION === '0' || 
+                  process.argv.some(arg => arg === '--hidden' || arg === '--minimized');
+  }
+  
+  // 如果不是开机自启动，则显示窗口
+  createWindow(!isAutoStart);
   createTray();
 });
 
@@ -375,16 +419,149 @@ ipcMain.handle('dialog-open-files', async () => {
   return result;
 });
 
-// App settings
 ipcMain.handle('app-set-autostart', (event, openAtLogin) => {
-  app.setLoginItemSettings({
-    openAtLogin: openAtLogin,
-    path: app.getPath('exe'),
-  });
-  return { success: true };
+  // 获取最准确的可执行文件路径
+  let exePath;
+  if (process.platform === 'win32') {
+    // 优先使用 PORTABLE_EXECUTABLE_FILE（如果存在），否则使用 process.execPath
+    exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  } else {
+    // Linux 端优先使用 APPIMAGE 环境变量，如果不是以 AppImage 运行则使用 app.getPath('exe')
+    exePath = process.env.APPIMAGE || app.getPath('exe');
+  }
+  
+  console.log('[Autostart SET] Platform:', process.platform);
+  console.log('[Autostart SET] Exe Path:', exePath);
+  console.log('[Autostart SET] openAtLogin:', openAtLogin);
+  
+  if (process.platform === 'win32') {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: openAtLogin,
+        path: exePath,
+        args: ['--hidden'],
+        name: '4yMail'
+      });
+      return { success: true };
+    } catch (err) {
+      console.error('[Autostart SET] Win32 Error:', err);
+      return { success: false, error: err.message };
+    }
+  } else if (process.platform === 'linux') {
+    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
+    const desktopPath = path.join(autostartDir, '4ymail.desktop');
+    
+    if (openAtLogin) {
+      try {
+        if (!fs.existsSync(autostartDir)) {
+          fs.mkdirSync(autostartDir, { recursive: true });
+        }
+        
+        const desktopContent = `[Desktop Entry]
+Type=Application
+Name=4yMail
+Comment=4yMail email client
+Exec="${exePath}" --hidden
+Terminal=false
+Icon=4ymail
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=false
+X-GNOME-AutoRestart=false
+StartupNotify=false
+`;
+        fs.writeFileSync(desktopPath, desktopContent, 'utf-8');
+        fs.chmodSync(desktopPath, '755');
+        return { success: true };
+      } catch (err) {
+        console.error('[Autostart SET] Linux Error:', err);
+        return { success: false, error: err.message };
+      }
+    } else {
+      try {
+        if (fs.existsSync(desktopPath)) {
+          fs.unlinkSync(desktopPath);
+        }
+        return { success: true };
+      } catch (err) {
+        console.error('[Autostart SET] Linux Remove Error:', err);
+        return { success: false, error: err.message };
+      }
+    }
+  } else {
+    // macOS
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: openAtLogin,
+        path: exePath,
+        args: []
+      });
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
 });
 
 ipcMain.handle('app-get-autostart', () => {
-  const settings = app.getLoginItemSettings();
-  return { success: true, enabled: settings.openAtLogin };
+  let exePath;
+  if (process.platform === 'win32') {
+    exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  } else {
+    exePath = process.env.APPIMAGE || app.getPath('exe');
+  }
+  
+  if (process.platform === 'win32') {
+    try {
+      const settings = app.getLoginItemSettings({
+        path: exePath,
+        args: ['--hidden']
+      });
+      return { success: true, enabled: settings.openAtLogin };
+    } catch (err) {
+      return { success: false, error: err.message, enabled: false };
+    }
+  } else if (process.platform === 'linux') {
+    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
+    const desktopPath = path.join(autostartDir, '4ymail.desktop');
+    
+    try {
+      if (!fs.existsSync(desktopPath)) {
+        return { success: true, enabled: false };
+      }
+      
+      const content = fs.readFileSync(desktopPath, 'utf-8');
+      
+      // 检查是否包含关键行
+      if (content.includes('Hidden=true') || content.includes('X-GNOME-Autostart-enabled=false')) {
+        return { success: true, enabled: false };
+      }
+
+      // 简单起见，只要文件存在且未显式禁用，且包含 Exec="/path/to/exe" 就算已启用
+      // 我们不进行严苛的完全路径匹配，因为 AppImage 路径在运行时可能会变化
+      const execLine = content.split('\n').find(line => line.startsWith('Exec='));
+      if (!execLine) return { success: true, enabled: false };
+      
+      // 如果 Exec 行包含了当前应用的标识符（不分大小写），则认为匹配
+      const appIdentifier = '4yMail';
+      if (execLine.toLowerCase().includes(appIdentifier.toLowerCase())) {
+        return { success: true, enabled: true };
+      }
+      
+      return { success: true, enabled: false };
+    } catch (err) {
+      console.error('[Autostart GET] Linux Error:', err);
+      return { success: false, error: err.message, enabled: false };
+    }
+  } else {
+    // macOS fallback
+    try {
+      const settings = app.getLoginItemSettings({
+        path: exePath
+      });
+      return { success: true, enabled: settings.openAtLogin };
+    } catch (err) {
+      return { success: false, error: err.message, enabled: false };
+    }
+  }
 });

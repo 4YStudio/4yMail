@@ -236,6 +236,20 @@
                   </div>
                 </div>
               </div>
+
+              <div class="field checkbox-field">
+                <div class="checkbox-container" @click="$emit('updateDynamicMailTheme', !dynamicMailTheme)">
+                  <div class="custom-checkbox" :class="{ checked: dynamicMailTheme }">
+                    <svg v-if="dynamicMailTheme" width="10" height="10" viewBox="0 0 24 24" fill="none">
+                      <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div class="checkbox-label">
+                    <span>邮件内容跟随深浅色模式动态变化（测试版）</span>
+                    <span class="hint">开启后，深色模式下原本白底黑字的邮件将自动转换为深色背景</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -259,13 +273,14 @@ const props = defineProps({
   pollingInterval: Number,
   zoomLevel: Number,
   autoStart: Boolean,
+  dynamicMailTheme: Boolean,
   connectingIds: {
     type: Array,
     default: () => []
   }
 })
 
-const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval', 'updateZoom', 'updateAutoStart', 'reconnect'])
+const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval', 'updateZoom', 'updateAutoStart', 'updateDynamicMailTheme', 'reconnect'])
 
 const currentTab = ref('accounts')
 const editingAccount = ref(null)

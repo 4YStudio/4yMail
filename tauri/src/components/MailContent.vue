@@ -257,6 +257,20 @@ function getSanitizedHtml(html) {
         }
       }
     })
+
+    // 【核心修复】将远程图片 URL 替换为后端代理 URL
+    // 解决 Linux/WebKit 下对 Mixed Content 和 CSP 的极严限制
+    const images = doc.querySelectorAll('img[src^="http"]')
+    images.forEach(img => {
+      const originalSrc = img.getAttribute('src')
+      if (originalSrc && !originalSrc.startsWith('data:')) {
+        img.setAttribute('src', `mail-img://proxy/${encodeURIComponent(originalSrc)}`)
+        // 同时也处理潜在的 data-src (部分邮件使用懒加载)
+        if (img.hasAttribute('data-src')) {
+           img.setAttribute('data-src', `mail-img://proxy/${encodeURIComponent(img.getAttribute('data-src'))}`)
+        }
+      }
+    })
     
     return `<div class="mail-body-wrapper" ${bodyAttrs}>${body.innerHTML}</div>`
   } catch (e) {

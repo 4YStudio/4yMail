@@ -1,6 +1,6 @@
 [package]
 name = "forymail"
-version = "1.0.5"
+version = "1.0.6"
 description = "A modern, glassmorphism-style email client."
 authors = ["Henvei"]
 edition = "2021"
@@ -26,7 +26,9 @@ native-tls = "0.2"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "native-tls"] }
 mail-parser = "0.9"
 base64 = "0.22"
+reqwest = { version = "0.12", features = ["blocking"] }
 tokio = { version = "1", features = ["time", "sync"] }
+urlencoding = "2"
 log = "0.4"
 mime_guess = "2"
 

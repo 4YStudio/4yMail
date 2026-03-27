@@ -682,6 +682,60 @@ pub fn run() {
             Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_log::Builder::default().build())
+        .register_asynchronous_uri_scheme_protocol("mail-img", |app, request, responder| {
+            // 解析请求 URL，格式为 mail-img://proxy/<encoded_url>
+            let uri = request.uri().to_string();
+            let encoded_url = uri.trim_start_matches("mail-img://proxy/");
+            
+            // 解码 URL
+            let target_url = match urlencoding::decode(encoded_url) {
+                Ok(u) => u.into_owned(),
+                Err(_) => {
+                    responder.respond(tauri::http::Response::builder()
+                        .status(400)
+                        .body(Vec::new())
+                        .unwrap());
+                    return;
+                }
+            };
+
+            // 发起请求抓取图片
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build();
+                
+                if let Ok(client) = client {
+                    match client.get(&target_url).send().await {
+                        Ok(resp) => {
+                            let content_type = resp.headers()
+                                .get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("image/png")
+                                .to_string();
+                            
+                            if let Ok(bytes) = resp.bytes().await {
+                                responder.respond(tauri::http::Response::builder()
+                                    .header("Content-Type", content_type)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(bytes.to_vec())
+                                    .unwrap());
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Proxy image fetch error [{}]: {}", target_url, e);
+                        }
+                    }
+                }
+                
+                // 默认失败响应
+                responder.respond(tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap());
+            });
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             mail_connect,

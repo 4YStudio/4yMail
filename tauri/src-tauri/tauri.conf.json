@@ -1,6 +1,6 @@
 {
   "productName": "4yMail",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "identifier": "com.forymail.client",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src * data: blob: mail-img:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png",
@@ -33,7 +33,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "rpm", "nsis", "dmg"],
+    "targets": [
+      "appimage",
+      "deb",
+      "rpm",
+      "nsis",
+      "dmg"
+    ],
     "resources": [
       "../public/**/*"
     ],

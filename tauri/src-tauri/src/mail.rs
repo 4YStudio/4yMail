@@ -385,8 +385,26 @@ impl MailConnection {
 
         let date = parsed.date().map(|d| d.to_rfc3339());
 
-        let html = parsed.body_html(0).map(|s| s.to_string());
+        let mut html = parsed.body_html(0).map(|s| s.to_string());
         let text = parsed.body_text(0).map(|s| s.to_string());
+
+        // 处理 CID 嵌入图片：将 html 中的 cid: 链接替换为 base64 data uri
+        if let Some(ref mut html_content) = html {
+            use base64::Engine;
+            for att in parsed.attachments() {
+                if let Some(cid) = att.content_id() {
+                    let cid_url = format!("cid:{}", cid);
+                    if html_content.contains(&cid_url) {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(att.contents());
+                        let mime = att.content_type()
+                            .map(|ct| format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("")))
+                            .unwrap_or_else(|| "image/png".to_string());
+                        let data_uri = format!("data:{};base64,{}", mime, b64);
+                        *html_content = html_content.replace(&cid_url, &data_uri);
+                    }
+                }
+            }
+        }
 
         let mut attachments = Vec::new();
         for att in parsed.attachments() {

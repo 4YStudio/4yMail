@@ -4,21 +4,21 @@ import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import fs from 'fs';
 import os from 'os';
-import { MailService } from './mail.js';
+import { MailManager } from './manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 设置应用名称和识别码，这对通知显示非常重要
+app.setName('4yMail');
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.4ymail.app');
+}
+
 let mainWindow;
 let tray;
-// 记录是否是开机自启动
+let mailManager;
 let isAutoStart = false;
-// Map 管理多个账号的服务实例：Map<accountId, MailService>
-const mailServices = new Map();
-// 记录每个账号最后一次检查到的最大 UID: Map<accountId, number>
-const lastMaxUids = new Map();
-let pollingInterval = 5; // 默认 5 分钟
-let pollingTimer = null;
 let isQuitting = false;
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -42,6 +42,7 @@ function createWindow(showWindow = true) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      autoplayPolicy: 'no-user-gesture-required', // 允许自动播放提示音
     },
   });
 
@@ -50,6 +51,9 @@ function createWindow(showWindow = true) {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  // 初始化邮件管理器
+  mailManager = new MailManager(mainWindow);
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -99,7 +103,7 @@ function createTray() {
     {
       label: '立即检查邮件',
       click: () => {
-        checkAllAccounts();
+        mainWindow?.webContents.send('mail-refresh-all');
       }
     },
     { type: 'separator' },
@@ -120,87 +124,53 @@ function createTray() {
   });
 }
 
-function startPolling(intervalMinutes) {
-  if (intervalMinutes) pollingInterval = intervalMinutes;
-  stopPolling();
-  // 根据用户配置的时间间隔启动
-  pollingTimer = setInterval(checkAllAccounts, pollingInterval * 60 * 1000);
-  // 稍后立即检查一次
-  setTimeout(checkAllAccounts, 5000);
-}
-
-function stopPolling() {
-  if (pollingTimer) {
-    clearInterval(pollingTimer);
-    pollingTimer = null;
-  }
-}
-
-async function checkAllAccounts() {
-  for (const [accountId, service] of mailServices.entries()) {
-    try {
-      await checkNewEmails(accountId, service);
-    } catch (err) {
-      console.error(`Check failed for ${accountId}:`, err.message);
-    }
-  }
-}
+// 移除旧的轮询函数，功能已整合到 MailManager
 
 function sendSystemNotification(title, body) {
   const iconPath = isDev
     ? path.join(__dirname, '../public/logo.png')
     : path.join(__dirname, '../dist/logo.png');
 
+  console.log(`[Notification] Sending: ${title} - ${body}`);
+
   // 优先尝试 Electron 原生通知
   if (Notification.isSupported()) {
     try {
-      const notif = new Notification({ title, body, icon: iconPath });
+      const notif = new Notification({ 
+        title, 
+        body, 
+        icon: iconPath,
+        silent: false 
+      });
+      notif.on('click', () => {
+        mainWindow?.show();
+        mainWindow?.focus();
+      });
       notif.show();
       return;
     } catch (e) {
-      console.warn('Electron Notification failed, falling back to notify-send:', e.message);
+      console.warn('[Notification] Electron native notification error:', e.message);
     }
   }
 
-  // KDE6/Linux fallback: 使用 notify-send
-  const escapedTitle = title.replace(/'/g, "'\\''");
-  const escapedBody = body.replace(/'/g, "'\\''");
-  exec(`notify-send -a '4yMail' -i '${iconPath}' '${escapedTitle}' '${escapedBody}'`, (err) => {
-    if (err) console.error('notify-send failed:', err.message);
-  });
-}
-
-async function checkNewEmails(accountId, service) {
-  if (!service || !service.client) return;
+  // Linux 回退方案: 使用 notify-send
   try {
-    const res = await service.getMessages('INBOX', 1, 5);
-    if (res && res.messages && res.messages.length > 0) {
-      const currentMaxUid = Math.max(...res.messages.map(m => m.uid));
-      const lastMaxUid = lastMaxUids.get(accountId) || 0;
-
-      if (lastMaxUid === 0) {
-        lastMaxUids.set(accountId, currentMaxUid);
-        return;
-      }
-
-      if (currentMaxUid > lastMaxUid) {
-        const newMails = res.messages.filter(m => m.uid > lastMaxUid);
-        if (newMails.length > 0) {
-          const latest = newMails[0];
-          sendSystemNotification(
-            `4yMail - ${accountId} (${newMails.length} 封新邮件)`,
-            `${latest.from.name}: ${latest.subject}`
-          );
-
-          mainWindow?.webContents.send('mail-new-arrived', { accountId });
-        }
-        lastMaxUids.set(accountId, currentMaxUid);
-      }
-    }
-  } catch (error) {
-    console.error(`Polling error for ${accountId}:`, error);
+    // 基础过滤，防止注入
+    const cleanTitle = title.replace(/"/g, '\\"').replace(/`/g, '\\`');
+    const cleanBody = body.replace(/"/g, '\\"').replace(/`/g, '\\`');
+    
+    // 使用 -u critical 确保通知在锁屏或后台也能显示（可选）
+    // 使用 -a 指定应用名
+    const command = `notify-send -a "4yMail" -i "${iconPath}" "${cleanTitle}" "${cleanBody}"`;
+    exec(command, (err) => {
+      if (err) console.error('[Notification] notify-send failed:', err.message);
+    });
+  } catch (err) {
+    console.error('[Notification] Fallback error:', err.message);
   }
 }
+
+// checkNewEmails 功能已移动到 MailManager
 
 app.whenReady().then(() => {
   // 检测是否是开机自启动
@@ -227,15 +197,7 @@ app.whenReady().then(() => {
   createTray();
 });
 
-app.on('window-all-closed', async () => {
-  for (const [id, service] of mailServices.entries()) {
-    try {
-      await service.disconnect();
-    } catch (e) {
-      console.error(`Disconnect error for ${id}:`, e.message);
-    }
-  }
-  mailServices.clear();
+app.on('window-all-closed', () => {
   app.quit();
 });
 
@@ -259,45 +221,17 @@ ipcMain.handle('window-is-maximized', () => mainWindow?.isMaximized());
 
 // Mail operations
 ipcMain.handle('mail-connect', async (event, config) => {
-  const accountId = config.imap.user;
-  try {
-    const handleError = (err) => {
-      console.error(`Connection Error (${accountId}):`, err);
-      mainWindow?.webContents.send('mail-connection-error', {
-        accountId,
-        error: err.message || '连接异常断开'
-      });
-      mailServices.delete(accountId);
-    };
-    const service = new MailService(config.imap, handleError);
-    await service.connect();
-    mailServices.set(accountId, service);
-    // 连接第一个账号时或配置变化时启动轮询
-    startPolling();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
+  return await mailManager.connectAccount(config.imap.user, config.imap);
 });
 
 ipcMain.handle('mail-disconnect', async (event, accountId) => {
-  try {
-    const service = mailServices.get(accountId);
-    if (service) {
-      await service.disconnect();
-      mailServices.delete(accountId);
-      lastMaxUids.delete(accountId);
-    }
-    if (mailServices.size === 0) stopPolling();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
+  await mailManager.disconnectAccount(accountId);
+  return { success: true };
 });
 
 ipcMain.handle('mail-get-folders', async (event, accountId) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     const folders = await service.getFolders();
     return { success: true, data: folders };
@@ -308,7 +242,7 @@ ipcMain.handle('mail-get-folders', async (event, accountId) => {
 
 ipcMain.handle('mail-get-messages', async (event, { accountId, folder, page, pageSize }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     const messages = await service.getMessages(folder, page, pageSize);
     return { success: true, data: messages };
@@ -319,7 +253,7 @@ ipcMain.handle('mail-get-messages', async (event, { accountId, folder, page, pag
 
 ipcMain.handle('mail-get-message', async (event, { accountId, folder, uid }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     const message = await service.getMessage(folder, uid);
     return { success: true, data: message };
@@ -343,11 +277,11 @@ ipcMain.handle('mail-send', async (event, { smtpConfig, mailOptions }) => {
 
 ipcMain.handle('mail-save-draft', async (event, { accountId, content }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
 
     // 动态解析草稿箱路径
-    const folders = await service.client.list();
+    const folders = await service.getFolders();
     const draftFolder = folders.find(f => f.specialUse === '\\Drafts') ||
       folders.find(f => f.path.toLowerCase().includes('draft')) ||
       { path: 'INBOX' }; // 兜底
@@ -359,9 +293,31 @@ ipcMain.handle('mail-save-draft', async (event, { accountId, content }) => {
   }
 });
 
+ipcMain.handle('mail-get-sound', async () => {
+  try {
+    const soundPath = isDev 
+      ? path.join(__dirname, '../public/sounds/message-sound.mp3')
+      : path.join(app.getAppPath(), 'dist/sounds/message-sound.mp3');
+      
+    console.log(`[Mail] Requested sound path: ${soundPath}`);
+    
+    if (fs.existsSync(soundPath)) {
+      const data = fs.readFileSync(soundPath);
+      console.log(`[Mail] Sound file found, size: ${data.length} bytes`);
+      return `data:audio/mpeg;base64,${data.toString('base64')}`;
+    } else {
+      console.warn(`[Mail] Sound file NOT found at: ${soundPath}`);
+    }
+    return null;
+  } catch (err) {
+    console.error('[Mail] Get sound error:', err);
+    return null;
+  }
+});
+
 ipcMain.handle('mail-delete', async (event, { accountId, folder, uid }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     await service.deleteMessage(folder, uid);
     return { success: true };
@@ -372,7 +328,7 @@ ipcMain.handle('mail-delete', async (event, { accountId, folder, uid }) => {
 
 ipcMain.handle('mail-move', async (event, { accountId, folder, uid, destination }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     await service.moveMessage(folder, uid, destination);
     return { success: true };
@@ -383,7 +339,7 @@ ipcMain.handle('mail-move', async (event, { accountId, folder, uid, destination 
 
 ipcMain.handle('mail-mark-seen', async (event, { accountId, folder, uid }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     await service.markSeen(folder, uid);
     return { success: true };
@@ -394,7 +350,7 @@ ipcMain.handle('mail-mark-seen', async (event, { accountId, folder, uid }) => {
 
 ipcMain.handle('mail-mark-unseen', async (event, { accountId, folder, uid }) => {
   try {
-    const service = mailServices.get(accountId);
+    const service = mailManager.getService(accountId);
     if (!service) throw new Error('账号未连接');
     await service.markUnseen(folder, uid);
     return { success: true };
@@ -403,165 +359,38 @@ ipcMain.handle('mail-mark-unseen', async (event, { accountId, folder, uid }) => 
   }
 });
 
-ipcMain.handle('mail-update-polling', (event, interval) => {
-  startPolling(interval);
-  return { success: true };
+// 监听来自 Manager 的通知请求
+ipcMain.on('request-system-notification', (event, { title, body }) => {
+  sendSystemNotification(title, body);
 });
 
-ipcMain.handle('open-external', async (event, url) => {
-  shell.openExternal(url);
+// 测试工具箱：手动触发通知和音效
+ipcMain.on('test-notification', () => {
+  console.log('[Test] Triggering test notification and sound');
+  sendSystemNotification('测试通知', '这是一条来自 4yMail 测试工具箱的测试消息。');
+  mainWindow?.webContents.send('play-sound');
 });
 
-ipcMain.handle('dialog-open-files', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'multiSelections']
+// 测试工具箱：模拟连接错误
+ipcMain.on('test-connection-error', () => {
+  mailManager.scheduleReconnect('test@example.com');
+  mainWindow?.webContents.send('mail-connection-error', {
+    accountId: 'test@example.com',
+    error: '这是一条模拟的连接断开错误'
   });
-  return result;
 });
 
-ipcMain.handle('app-set-autostart', (event, openAtLogin) => {
-  // 获取最准确的可执行文件路径
-  let exePath;
-  if (process.platform === 'win32') {
-    // 优先使用 PORTABLE_EXECUTABLE_FILE（如果存在），否则使用 process.execPath
-    exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
-  } else {
-    // Linux 端优先使用 APPIMAGE 环境变量，如果不是以 AppImage 运行则使用 app.getPath('exe')
-    exePath = process.env.APPIMAGE || app.getPath('exe');
-  }
-  
-  console.log('[Autostart SET] Platform:', process.platform);
-  console.log('[Autostart SET] Exe Path:', exePath);
-  console.log('[Autostart SET] openAtLogin:', openAtLogin);
-  
-  if (process.platform === 'win32') {
-    try {
-      app.setLoginItemSettings({
-        openAtLogin: openAtLogin,
-        path: exePath,
-        args: ['--hidden'],
-        name: '4yMail'
-      });
-      return { success: true };
-    } catch (err) {
-      console.error('[Autostart SET] Win32 Error:', err);
-      return { success: false, error: err.message };
-    }
-  } else if (process.platform === 'linux') {
-    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
-    const desktopPath = path.join(autostartDir, '4ymail.desktop');
-    
-    if (openAtLogin) {
-      try {
-        if (!fs.existsSync(autostartDir)) {
-          fs.mkdirSync(autostartDir, { recursive: true });
-        }
-        
-        const desktopContent = `[Desktop Entry]
-Type=Application
-Name=4yMail
-Comment=4yMail email client
-Exec="${exePath}" --hidden
-Terminal=false
-Icon=4ymail
-X-GNOME-Autostart-enabled=true
-Hidden=false
-NoDisplay=false
-X-GNOME-AutoRestart=false
-StartupNotify=false
-`;
-        fs.writeFileSync(desktopPath, desktopContent, 'utf-8');
-        fs.chmodSync(desktopPath, '755');
-        return { success: true };
-      } catch (err) {
-        console.error('[Autostart SET] Linux Error:', err);
-        return { success: false, error: err.message };
-      }
-    } else {
-      try {
-        if (fs.existsSync(desktopPath)) {
-          fs.unlinkSync(desktopPath);
-        }
-        return { success: true };
-      } catch (err) {
-        console.error('[Autostart SET] Linux Remove Error:', err);
-        return { success: false, error: err.message };
-      }
-    }
-  } else {
-    // macOS
-    try {
-      app.setLoginItemSettings({
-        openAtLogin: openAtLogin,
-        path: exePath,
-        args: []
-      });
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  }
+// 测试工具箱：清空轮询缓存指标
+ipcMain.on('test-clear-cache', () => {
+  console.log('[Test] Clearing polling cache via Manager');
+  mailManager.states = {};
+  mailManager.saveState();
+  mainWindow?.webContents.send('notif-message', { message: '轮询缓存（持久化）已清空', type: 'info' });
 });
 
-ipcMain.handle('app-get-autostart', () => {
-  let exePath;
-  if (process.platform === 'win32') {
-    exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
-  } else {
-    exePath = process.env.APPIMAGE || app.getPath('exe');
-  }
-  
-  if (process.platform === 'win32') {
-    try {
-      const settings = app.getLoginItemSettings({
-        path: exePath,
-        args: ['--hidden']
-      });
-      return { success: true, enabled: settings.openAtLogin };
-    } catch (err) {
-      return { success: false, error: err.message, enabled: false };
-    }
-  } else if (process.platform === 'linux') {
-    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
-    const desktopPath = path.join(autostartDir, '4ymail.desktop');
-    
-    try {
-      if (!fs.existsSync(desktopPath)) {
-        return { success: true, enabled: false };
-      }
-      
-      const content = fs.readFileSync(desktopPath, 'utf-8');
-      
-      // 检查是否包含关键行
-      if (content.includes('Hidden=true') || content.includes('X-GNOME-Autostart-enabled=false')) {
-        return { success: true, enabled: false };
-      }
-
-      // 简单起见，只要文件存在且未显式禁用，且包含 Exec="/path/to/exe" 就算已启用
-      // 我们不进行严苛的完全路径匹配，因为 AppImage 路径在运行时可能会变化
-      const execLine = content.split('\n').find(line => line.startsWith('Exec='));
-      if (!execLine) return { success: true, enabled: false };
-      
-      // 如果 Exec 行包含了当前应用的标识符（不分大小写），则认为匹配
-      const appIdentifier = '4yMail';
-      if (execLine.toLowerCase().includes(appIdentifier.toLowerCase())) {
-        return { success: true, enabled: true };
-      }
-      
-      return { success: true, enabled: false };
-    } catch (err) {
-      console.error('[Autostart GET] Linux Error:', err);
-      return { success: false, error: err.message, enabled: false };
-    }
-  } else {
-    // macOS fallback
-    try {
-      const settings = app.getLoginItemSettings({
-        path: exePath
-      });
-      return { success: true, enabled: settings.openAtLogin };
-    } catch (err) {
-      return { success: false, error: err.message, enabled: false };
-    }
-  }
+// 测试工具箱：打开日志/主目录
+ipcMain.on('test-open-logs', () => {
+  const logPath = app.getPath('userData');
+  console.log(`[Test] Opening app directory: ${logPath}`);
+  shell.openPath(logPath);
 });

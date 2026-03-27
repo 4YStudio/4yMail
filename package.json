@@ -2,7 +2,7 @@
   "name": "4ymail",
   "version": "1.0.4",
   "description": "A modern, glassmorphism-style email client.",
-  "author": "Henvei",
+  "author": "Henvei <henvei@4ymail.com>",
   "private": true,
   "type": "module",
   "main": "electron/main.js",
@@ -48,7 +48,8 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
       "category": "Network",
       "icon": "public/logo.png"

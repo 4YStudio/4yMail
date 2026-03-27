@@ -1,0 +1,38 @@
+[package]
+name = "forymail"
+version = "1.0.5"
+description = "A modern, glassmorphism-style email client."
+authors = ["Henvei"]
+edition = "2021"
+
+[lib]
+name = "fourym_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+imap = "2"
+native-tls = "0.2"
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "native-tls"] }
+mail-parser = "0.9"
+base64 = "0.22"
+tokio = { version = "1", features = ["time", "sync"] }
+log = "0.4"
+mime_guess = "2"
+
+[profile.release]
+panic = "abort" # 取消 panic clean-up
+codegen-units = 1 # 更好的编译器优化串联
+lto = true # 链接时间优化
+opt-level = "s" # 针对二进制体积优化，用 s 代替 3
+strip = true # 完全剥离符号表

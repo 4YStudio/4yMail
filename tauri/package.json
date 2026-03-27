@@ -1,0 +1,24 @@
+{
+  "name": "4ymail-tauri",
+  "version": "1.0.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-shell": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-autostart": "^2",
+    "vue": "^3.5.29"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "vite": "^7.3.1"
+  }
+}

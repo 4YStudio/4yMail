@@ -38,3 +38,12 @@ __screenshots__/
 
 # Vite
 *.timestamp-*-*.mjs
+
+# --- Tauri / Rust Specific ---
+/tauri/src-tauri/target/
+/tauri/src-tauri/gen/
+/tauri/dist/
+/tauri/node_modules/
+
+# --- Tools ---
+.qoder/

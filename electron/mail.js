@@ -3,10 +3,12 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 
 export class MailService {
-    constructor(config, onError = null) {
+    constructor(config, onError = null, onNewMail = null) {
         this.config = config;
         this.onError = onError;
+        this.onNewMail = onNewMail;
         this.client = null;
+        this.idleLock = null;
     }
 
     async connect() {
@@ -19,26 +21,51 @@ export class MailService {
                 pass: this.config.pass,
             },
             tls: {
-                // 解决某些服务器（如 QQ、某些企业邮）可能存在的证书校验或旧加密协议导致的 BAD_DECRYPT 错误
                 rejectUnauthorized: false
             },
             logger: false,
         });
 
-        // 关键：挂载错误监听器，防止未处理的异步错误导致主进程崩溃
         this.client.on('error', (err) => {
             console.error(`IMAP Client Error (${this.config.user}):`, err.message || err);
             if (this.onError) {
                 this.onError(err);
             }
-            // 发生严重错误时，建议手动断开并置空，避免重试死循环
-            if (this.client) {
-                this.client.logout().catch(() => { });
-                this.client = null;
-            }
+            this.client = null;
+        });
+
+        // 监听邮箱变动事件
+        this.client.on('exists', (data) => {
+            console.log(`[MailService] Mailbox update for ${this.config.user}:`, data);
+            if (this.onNewMail) this.onNewMail(data);
         });
 
         await this.client.connect();
+    }
+
+    async startIdle(folder = 'INBOX') {
+        if (!this.client) return;
+        console.log(`[MailService] Starting IDLE for ${this.config.user} on ${folder}`);
+        
+        // 持续保持一个邮箱处于选中并 IDLE 状态
+        while (this.client) {
+            try {
+                this.idleLock = await this.client.getMailboxLock(folder);
+                // imapflow 在锁定期且无操作时会自动 IDLE
+                // 如果锁释放，则说明活跃操作需要使用连接，或者断开了
+                await this.idleLock.release(); 
+                // 注意：在 imapflow 中，只要不显式退出，它就会尽量保持连接
+                // 对于 IDLE，我们其实只需要确保定期有活动或者保持选中状态
+                await new Promise(resolve => setTimeout(resolve, 60000)); // 每分钟检查一次状态
+            } catch (e) {
+                console.warn(`[MailService] IDLE loop error for ${this.config.user}:`, e.message);
+                break;
+            }
+        }
+    }
+
+    isConnected() {
+        return this.client && (this.client.state === 'authenticated' || this.client.state === 'connected');
     }
 
     async disconnect() {
@@ -76,6 +103,9 @@ export class MailService {
 
         const lock = await this.client.getMailboxLock(folder);
         try {
+            // 关键：强制获取最新的邮箱状态（exists, unseen 等）
+            // status 命令比 noop 更能确保获得最新的数值信息
+            await this.client.status(folder, { messages: true });
             const mailbox = this.client.mailbox;
             const total = mailbox.exists;
 

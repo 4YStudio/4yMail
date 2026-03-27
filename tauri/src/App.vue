@@ -1,6 +1,6 @@
 <template>
-  <div class="app-container">
-    <div class="window-drag-region"></div>
+  <div class="app-container" :style="isTauri ? rootStyle : {}">
+    <div class="window-drag-region" data-tauri-drag-region @mousedown="startDrag"></div>
     <div class="app-body">
       <SideNav
         :activeView="currentView"
@@ -89,7 +89,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed, watch, shallowRef } from 'vue'
 import SideNav from './components/SideNav.vue'
 import MailList from './components/MailList.vue'
 import MailContent from './components/MailContent.vue'
@@ -102,7 +102,7 @@ const currentFolder = ref('INBOX')
 const mails = ref([])
 const folders = ref([])
 const selectedMailUid = ref(null)
-const currentMailDetail = ref(null)
+const currentMailDetail = shallowRef(null)
 const loadingList = ref(false)
 const loadingDetail = ref(false)
 const notification = ref(null)
@@ -136,8 +136,23 @@ const connected = computed(() => {
   return currentAccount.value?.connected || false
 })
 
-// 检测是否在 Electron 环境中
-const isElectron = typeof window !== 'undefined' && window.electronAPI
+// 检测当前运行环境
+const isTauri = typeof window !== 'undefined' && window.__IS_TAURI__
+const isElectron = typeof window !== 'undefined' && window.electronAPI && !isTauri
+const isDesktop = isTauri || isElectron
+
+import { invoke } from '@tauri-apps/api/core'
+import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
+function startDrag(e) {
+  // 只响应左键点击
+  if (e.button !== 0) return
+  // 如果是 Tauri，尝试使用自定义的 Rust 原生拖拽 API
+  if (isTauri) {
+    invoke('start_drag').catch(err => {
+      console.warn('Failed to start dragging via rust:', err)
+    })
+  }
+}
 
 // 将 reactive 对象转为纯对象，避免 Electron IPC 克隆错误
 function toPlain(obj) {
@@ -159,6 +174,19 @@ const folderMap = {
 
 // 从 localStorage 加载配置 + 自动连接
 onMounted(async () => {
+  // 检查并请求通知权限（针对 Tauri v2）
+  if (isTauri) {
+    try {
+      let permission = await isPermissionGranted();
+      if (!permission) {
+        permission = await requestPermission();
+      }
+      console.log('[Notification] Permission state:', permission);
+    } catch (err) {
+      console.error('[Notification] Failed to check permission:', err);
+    }
+  }
+
   const savedAccounts = localStorage.getItem('4ymail-accounts')
   if (savedAccounts) {
     try {
@@ -173,22 +201,25 @@ onMounted(async () => {
       pollingInterval.value = settings.pollingInterval || 5
       zoomLevel.value = settings.zoomLevel || 100
       dynamicMailTheme.value = settings.dynamicMailTheme !== undefined ? settings.dynamicMailTheme : true
-      if (isElectron) {
+      if (isDesktop) {
         window.electronAPI.updatePollingInterval(pollingInterval.value)
-        window.electronAPI.setZoomFactor(zoomLevel.value / 100)
+        if (isElectron) {
+          window.electronAPI.setZoomFactor(zoomLevel.value / 100)
+        }
       }
     } catch {}
   }
 
   // 初始化自启动状态
-  if (isElectron) {
+  if (isDesktop) {
     const asRes = await window.electronAPI.getAutostart()
     if (asRes.success) autoStart.value = asRes.enabled
   }
 
   // 监听来自主进程的连接异常
-  if (isElectron) {
+  if (isDesktop) {
     window.electronAPI.onConnectionError(({ accountId, error }) => {
+      console.error(`[IPC] Connection Error for ${accountId}:`, error);
       showNotif(`账号 ${accountId} 连接断开: ${error}`, 'error')
       const acc = accounts.value.find(a => a.id === accountId)
       if (acc) {
@@ -200,6 +231,7 @@ onMounted(async () => {
       }
     })
     window.electronAPI.onConnectionSuccess(async ({ accountId }) => {
+      console.log(`[IPC] Connection Success for ${accountId}`);
       const acc = accounts.value.find(a => a.id === accountId)
       if (acc) {
         acc.connected = true
@@ -218,6 +250,7 @@ onMounted(async () => {
       }
     })
     window.electronAPI.onNewMailArrived(({ accountId }) => {
+      console.log(`[IPC] New Mail Arrived for ${accountId}`);
       // 如果当前在收件箱查看，且涉及该账号或统一视图，则刷新列表
       if (currentFolder.value === 'INBOX' && (currentAccountId.value === 'unified' || currentAccountId.value === accountId)) {
         handleRefresh()
@@ -234,25 +267,15 @@ onMounted(async () => {
         console.log('[Audio] Requesting sound data...');
         const soundData = await window.electronAPI.getSoundData();
         if (soundData) {
-          console.log('[Audio] Received sound data, playing...');
+          console.log('[Audio] Received sound data, length:', soundData.length);
           const audio = new Audio(soundData);
-          // Set volume explicitly to ensure it's not muted
-          audio.volume = 1.0;
           await audio.play();
           console.log('[Audio] Play success');
-        } else {
-          throw new Error('No sound data received');
         }
       } catch (err) {
-        console.warn('[Audio] IPC Play failed, trying fallback:', err);
-        // Fallback: try direct path if we are in dev or if the path is accessible
-        const fallbackAudio = new Audio('/sounds/message-sound.mp3');
-        fallbackAudio.volume = 1.0;
-        fallbackAudio.play().then(() => {
-          console.log('[Audio] Fallback play success');
-        }).catch(fallbackErr => {
-          console.error('[Audio] All play attempts failed:', fallbackErr);
-        });
+        console.warn('[Audio] Play failed:', err);
+        // Fallback to relative path if IPC fails
+        new Audio('sounds/message-sound.mp3').play().catch(() => {});
       }
     })
   }
@@ -280,12 +303,25 @@ watch(accounts, (newVal) => {
 
 watch(pollingInterval, (newVal) => {
   saveSettings()
-  if (isElectron) window.electronAPI.updatePollingInterval(newVal)
+  if (isDesktop) window.electronAPI.updatePollingInterval(newVal)
+})
+
+// 动态计算根容器样式，实现全局缩放 (Tauri WebKit 兼容方案)
+const rootStyle = computed(() => {
+  const scale = zoomLevel.value / 100
+  return {
+    transform: `scale(${scale})`,
+    transformOrigin: 'top left',
+    width: `${100 / scale}%`,
+    height: `${100 / scale}%`
+  }
 })
 
 watch(zoomLevel, (newVal) => {
   saveSettings()
-  if (isElectron) window.electronAPI.setZoomFactor(newVal / 100)
+  if (isElectron) {
+    window.electronAPI.setZoomFactor(newVal / 100)
+  }
 })
 
 watch(dynamicMailTheme, () => {
@@ -293,7 +329,7 @@ watch(dynamicMailTheme, () => {
 })
 
 watch(autoStart, async (newVal) => {
-  if (isElectron) {
+  if (isDesktop) {
     try {
       await window.electronAPI.setAutostart(newVal)
     } catch (err) {
@@ -444,7 +480,7 @@ async function onDeleteAccount(id) {
 
 
 async function handleConnect(accountId) {
-  if (!isElectron) {
+  if (!isDesktop) {
     showNotif('请在桌面应用中使用邮件功能', 'warning')
     return
   }
@@ -487,7 +523,7 @@ async function handleConnect(accountId) {
 }
 
 async function handleDisconnect(accountId) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const acc = accounts.value.find(a => a.id === accountId)
   if (!acc) return
 
@@ -506,7 +542,7 @@ async function handleDisconnect(accountId) {
 }
 
 async function handleRefresh() {
-  if (!isElectron) return
+  if (!isDesktop) return
 
   // 先尝试重连断开的账号
   const disconnected = accounts.value.filter(a => !a.connected && a.imap.host && a.imap.user)
@@ -591,7 +627,7 @@ async function handleSelectMail(mail) {
   const accountId = mail.accountId || currentAccountId.value
   
   selectedMailUid.value = uid
-  if (!isElectron) return
+  if (!isDesktop) return
   
   try {
     loadingDetail.value = true
@@ -606,7 +642,7 @@ async function handleSelectMail(mail) {
       uid,
     })
     if (res.success) {
-      currentMailDetail.value = { ...res.data, accountId }
+      currentMailDetail.value = { ...res.data, accountId, folder: realFolder }
       // 更新列表中的已读状态
       const idx = mails.value.findIndex(m => m.uid === uid && (m.accountId === accountId))
       if (idx !== -1) mails.value[idx].seen = true
@@ -697,7 +733,7 @@ async function handleMoveTrashFromContent(mail) {
 // === 右键菜单处理函数 ===
 
 async function handleMarkRead(mail) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const accountId = mail.accountId || currentAccountId.value
   const folder = currentAccountId.value === 'unified'
     ? resolveFolder(currentFolder.value, accounts.value.find(a => a.id === accountId)?.folders || [])
@@ -714,7 +750,7 @@ async function handleMarkRead(mail) {
 }
 
 async function handleMarkUnread(mail) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const accountId = mail.accountId || currentAccountId.value
   const folder = currentAccountId.value === 'unified'
     ? resolveFolder(currentFolder.value, accounts.value.find(a => a.id === accountId)?.folders || [])
@@ -748,7 +784,7 @@ async function handleCtxReply(mail) {
 }
 
 async function handleCtxDelete(mail) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const accountId = mail.accountId || currentAccountId.value
   if (accountId === 'unified') return
   const folder = currentAccountId.value === 'unified'
@@ -772,7 +808,7 @@ async function handleCtxDelete(mail) {
 }
 
 async function handleMoveTrash(mail) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const accountId = mail.accountId || currentAccountId.value
   if (accountId === 'unified') return
   const acc = accounts.value.find(a => a.id === accountId)
@@ -811,7 +847,7 @@ function handleCopyAddr(mail) {
 
 
 async function handleDelete(uid) {
-  if (!isElectron) return
+  if (!isDesktop) return
   const accountId = currentMailDetail.value?.accountId || currentAccountId.value
   if (!accountId || accountId === 'unified') return
   
@@ -862,7 +898,7 @@ function handleMailSent() {
   left: 0;
   right: 0;
   height: 32px;
-  -webkit-app-region: drag;
+  -webkit-app-region: drag; /* 兼容 Electron */
   z-index: 10;
 }
 

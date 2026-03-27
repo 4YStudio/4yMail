@@ -1,0 +1,149 @@
+    Checking fourym v1.0.4 (/home/henvei/文档/云语软件中心相关开发/4yMail/tauri/src-tauri)
+error[E0425]: cannot find type `Address` in module `imap::types`
+   --> src/mail.rs:120:47
+    |
+120 | ...s::Address) -...
+    |       ^^^^^^^ not found in `imap::types`
+    |
+help: consider importing one of these items
+    |
+  1 + use lettre::Address;
+    |
+  1 + use mail_parser::Address;
+    |
+help: if you import `Address`, refer to it directly
+    |
+120 - fn imap_addr_to_mail_address(a: &imap::types::Address) -> MailAddress {
+120 + fn imap_addr_to_mail_address(a: &Address) -> MailAddress {
+    |
+
+warning: unexpected `cfg` condition value: `notification`
+   --> src/lib.rs:279:19
+    |
+279 | ...fg(feature = "notification")]
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `notification` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+error[E0599]: no method named `attachment_name` found for reference `&MessagePart<'_>` in the current scope
+   --> src/mail.rs:367:32
+    |
+367 | ...tt.attachment_name()
+    |       ^^^^^^^^^^^^^^^ method not found in `&MessagePart<'_>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `MimeHeaders` which provides `attachment_name` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use mail_parser::MimeHeaders;
+    |
+
+error[E0599]: no method named `content_type` found for reference `&MessagePart<'_>` in the current scope
+   --> src/mail.rs:370:36
+    |
+370 | ...tt.content_type()
+    |       ^^^^^^^^^^^^
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: there is a method `is_content_type` with a similar name, but with different arguments
+   --> /home/henvei/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mail-parser-0.9.4/src/lib.rs:640:5
+    |
+640 |     ...str) -> bool {
+    |     ...^^^^^^^^^^^^
+help: trait `MimeHeaders` which provides `content_type` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use mail_parser::MimeHeaders;
+    |
+
+error[E0282]: type annotations needed
+   --> src/mail.rs:371:23
+    |
+371 | ...p(|ct| {
+    |       ^^
+372 | ... let t = ct.ct...
+    |             -- type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+371 |                 .map(|ct: /* Type */| {
+    |                         ++++++++++++
+
+error[E0599]: no method named `finish` found for enum `Result<T, E>` in the current scope
+   --> src/mail.rs:430:14
+    |
+429 | / ...   self.session.a...
+430 | | ...       .finish()
+    | |           -^^^^^^ method not found in `Result<(), ...>`
+    | |___________|
+    |
+    |
+    = note: the full name for the type has been written to '/home/henvei/文档/云语软件中心相关开发/4yMail/tauri/src-tauri/target/debug/deps/fourym_lib-f3566ce3f1a806ea.long-type-24633508638946437.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0026]: variant `DoubleClick` does not have a field named `button_state`
+   --> src/lib.rs:331:17
+    |
+331 | ...   button_state: M...
+    |       ^^^^^^^^^^^^ variant `DoubleClick` does not have this field
+
+warning: unreachable pattern
+   --> src/mail.rs:145:9
+    |
+145 |         _ => Str...
+    |         ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/mail.rs:145:9
+    |
+137 | ...   imap::types::Flag::Seen => "\\...
+    |       ----------------------- matches some of the same values
+138 | ...   imap::types::Flag::Answered =>...
+    |       --------------------------- matches some of the same values
+139 | ...   imap::types::Flag::Flagged => ...
+    |       -------------------------- matches some of the same values
+140 | ...   imap::types::Flag::Deleted => ...
+    |       -------------------------- matches some of the same values
+...
+145 | ...   _ => String::new(),
+    |       ^ ...and 4 other patterns collectively make this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+    = note: the full name for the type has been written to '/home/henvei/文档/云语软件中心相关开发/4yMail/tauri/src-tauri/target/debug/deps/fourym_lib-f3566ce3f1a806ea.long-type-2258995113168977557.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+warning: unused variable: `latest`
+   --> src/lib.rs:276:17
+    |
+276 | ...et latest = &...
+    |       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_latest`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+error[E0597]: `state` does not live long enough
+   --> src/lib.rs:363:18
+    |
+356 | ...       let state = app.state::<AppState>();
+    |               ----- binding `state` declared here
+...
+363 | ...       *state.polling_interval.lock().unwrap()
+    |            ^^^^^---------------------------------
+    |            |
+    |            borrowed value does not live long enough
+    |            a temporary with access to the borrow is created here ...
+364 | ...   };
+    |       -- ... and the borrow might be used here, when that temporary is dropped and runs the `Drop` code for type `std::sync::MutexGuard`
+    |       |
+    |       `state` dropped here while still borrowed
+    |
+    = note: the temporary is part of an expression at the end of a block;
+            consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+help: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block
+    |
+363 |                 let x = *state.polling_interval.lock().unwrap(); x
+    |                 +++++++                                        +++
+
+Some errors have detailed explanations: E0026, E0282, E0425, E0597, E0599.
+For more information about an error, try `rustc --explain E0026`.
+warning: `fourym` (lib) generated 3 warnings
+error: could not compile `fourym` (lib) due to 7 previous errors; 3 warnings emitted

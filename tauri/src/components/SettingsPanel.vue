@@ -253,22 +253,6 @@
             </div>
           </div>
 
-          <!-- 测试工具箱 -->
-          <div class="settings-section">
-            <h4 class="section-title">测试工具箱</h4>
-            <div class="field-group">
-              <div class="field">
-                <label>手动功能验证</label>
-                <div class="test-toolbox-grid">
-                  <button class="btn-text" @click="handleTestNotification">测试通知与音效</button>
-                  <button class="btn-text danger-text" @click="handleTestError">模拟连接错误</button>
-                  <button class="btn-text" @click="handleTestClearCache">清空轮询缓存指标</button>
-                  <button class="btn-text" @click="handleTestOpenLogs">打开应用数据目录</button>
-                </div>
-                <span class="hint">这些工具仅供开发者调试使用，用于验证系统集成、UI状态和后台逻辑。</span>
-              </div>
-            </div>
-          </div>
         </div>
       </Transition>
     </div>

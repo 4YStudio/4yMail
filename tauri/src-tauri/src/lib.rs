@@ -114,7 +114,11 @@ async fn mail_get_folders(state: State<'_, AppState>, account_id: String) -> Res
             let mut conn = conn_mutex.lock().unwrap();
             match conn.get_folders() {
                 Ok(folders) => Ok(json!({ "success": true, "data": folders })),
-                Err(e) => Ok(json!({ "success": false, "error": e })),
+                Err(e) => {
+                    log::error!("获取文件夹失败 [{}]: {}", account_id, e);
+                    state.mail_services.lock().unwrap().remove(&account_id);
+                    Ok(json!({ "success": false, "error": e }))
+                },
             }
         },
         None => Ok(json!({ "success": false, "error": "账号未连接" })),
@@ -149,7 +153,10 @@ async fn mail_get_messages(state: State<'_, AppState>, params: GetMessagesParams
                     Ok(json!({ "success": true, "data": result }))
                 },
                 Err(e) => {
-                    log::error!("获取邮件列表失败: {}", e);
+                    log::error!("获取邮件列表失败，正在清理坏连接 ({}): {}", params.account_id, e);
+                    // 核心修复：如果操作失败，极大概率是连接已损坏，立即移除连接。
+                    // 这样下次前端请求或后台轮询就会通过 ensure_connection 重新登录。
+                    state.mail_services.lock().unwrap().remove(&params.account_id);
                     Ok(json!({ "success": false, "error": e }))
                 },
             }
@@ -181,7 +188,11 @@ async fn mail_get_message(state: State<'_, AppState>, params: GetMessageParams) 
             let mut conn = conn_mutex.lock().unwrap();
             match conn.get_message(&params.folder, params.uid) {
                 Ok(detail) => Ok(json!({ "success": true, "data": detail })),
-                Err(e) => Ok(json!({ "success": false, "error": e })),
+                Err(e) => {
+                    log::error!("获取邮件详情失败 [{}]: {}", params.account_id, e);
+                    state.mail_services.lock().unwrap().remove(&params.account_id);
+                    Ok(json!({ "success": false, "error": e }))
+                },
             }
         },
         None => Ok(json!({ "success": false, "error": "账号未连接" })),
@@ -542,12 +553,23 @@ fn check_new_emails(app: &AppHandle, state: &AppState, account_id: &str) {
 fn ensure_connection(app: &AppHandle, account_id: &str) -> bool {
     let state = app.state::<AppState>();
     
-    // 1. 检查是否已经有活跃连接
-    {
+    // 1. 检查是否已经有活跃连接，并进行实时心跳校验 (NOOP)
+    let is_alive = {
         let services = state.mail_services.lock().unwrap();
-        if services.contains_key(account_id) {
-            return true;
+        if let Some(conn_arc) = services.get(account_id) {
+            let mut conn = conn_arc.lock().unwrap();
+            conn.is_connected() // 发送 NOOP 指令进行心跳检测
+        } else {
+            false
         }
+    };
+    
+    if is_alive {
+        return true;
+    } else {
+        // 如果连接存在但已失效，主动清理之
+        let mut services = state.mail_services.lock().unwrap();
+        services.remove(account_id);
     }
 
     // 2. 如果没有连接，尝试使用保存的配置重连

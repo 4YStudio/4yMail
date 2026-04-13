@@ -1,6 +1,6 @@
 {
   "productName": "4yMail",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "identifier": "com.forymail.client",
   "build": {
     "beforeDevCommand": "npm run dev",

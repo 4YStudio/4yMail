@@ -97,9 +97,3 @@ pnpm tauri build
 
 This project is licensed under the [MIT License](./LICENSE).  
 本项目采用 [MIT 协议](./LICENSE) 授权。
-
----
-
-<div align="center">
-  <p>Built with ❤️ by Antigravity & USER</p>
-</div>

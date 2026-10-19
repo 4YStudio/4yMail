@@ -1,6 +1,6 @@
 <template>
   <div class="mailcontent" @contextmenu.prevent="handleContextMenu">
-    <WindowControls class="main-window-controls" />
+    <div v-if="loading && mail" class="detail-refresh-indicator"></div>
 
     <!-- 空状态 -->
     <div v-if="!mail && !loading" class="mailcontent-empty">
@@ -20,87 +20,104 @@
     </div>
 
     <!-- 加载中 -->
-    <div v-else-if="loading" class="mailcontent-empty">
+    <div v-else-if="loading && !mail" class="mailcontent-empty">
       <div class="loading-spinner"></div>
       <span>加载中...</span>
     </div>
 
     <!-- 邮件详情 -->
     <template v-else-if="mail">
-      <div class="mail-detail-header">
-        <h2 class="mail-detail-subject">{{ mail.subject }}</h2>
-        <div class="mail-detail-actions">
-          <button class="action-btn" @click="$emit('reply', mail)" title="回复">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M9 17l-5-5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M4 12h12a4 4 0 014 4v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <button class="action-btn" title="转发">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M15 17l5-5-5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M20 12H8a4 4 0 00-4 4v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <button class="action-btn danger" @click="$emit('delete', mail.uid)" title="删除">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="mail-detail-meta">
-        <div class="meta-avatar" :style="{ background: getAvatarColor(mail.from.address) }">
-          {{ getInitial(mail.from.name) }}
-        </div>
-        <div class="meta-info">
-          <div class="meta-from">
-            <span class="from-name">{{ mail.from.name }}</span>
-            <span class="from-addr">&lt;{{ mail.from.address }}&gt;</span>
+      <div class="mail-detail-view" :key="`${mail.accountId || ''}:${mail.folder || ''}:${mail.uid}`">
+        <div class="mail-detail-header">
+          <h2 class="mail-detail-subject">{{ mail.subject || '（无主题）' }}</h2>
+          <div class="mail-detail-actions">
+            <button class="action-btn" @click="$emit('reply', mail)" title="回复">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M9 17l-5-5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M4 12h12a4 4 0 014 4v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="action-btn" @click="$emit('forward', mail)" title="转发">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M15 17l5-5-5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M20 12H8a4 4 0 00-4 4v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="action-btn star-btn" :class="{ active: mail.flagged }" @click="$emit('toggleStar', mail)" :title="mail.flagged ? '取消星标' : '标记星标'">
+              <svg width="18" height="18" viewBox="0 0 24 24" :fill="mail.flagged ? '#f39c12' : 'none'">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" :stroke="mail.flagged ? '#f39c12' : 'currentColor'" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="action-btn" @click="$emit('markUnread', mail)" title="标记为未读">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="action-btn" @click="$emit('moveTrash', mail)" title="移至垃圾箱">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button class="action-btn danger" @click="$emit('delete', mail.uid)" title="彻底删除">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
           </div>
-          <div class="meta-to">
-            收件人: {{ mail.to?.map(t => t.name || t.address).join(', ') || '-' }}
-          </div>
-          <div v-if="mail.cc && mail.cc.length" class="meta-cc">
-            抄送: {{ mail.cc.map(t => t.name || t.address).join(', ') }}
-          </div>
         </div>
-        <div class="meta-date">{{ formatFullDate(mail.date) }}</div>
-      </div>
 
-      <div class="mail-detail-body selectable" ref="bodyRef" @click="handleBodyClick">
-        <div 
-          v-if="mail.html" 
-          v-html="deferredHtml" 
-          class="mail-html-content"
-          :class="{ 'dynamic-theme': dynamicMailTheme }"
-        ></div>
-        <pre v-else-if="mail.text" class="mail-text-content">{{ mail.text }}</pre>
-        <p v-else class="mail-no-content">（邮件无内容）</p>
-      </div>
+        <div class="mail-detail-meta">
+          <div class="meta-info">
+            <div class="meta-from">
+              <span class="from-name">{{ mail.from?.name || mail.from?.address || '未知发件人' }}</span>
+              <span v-if="mail.from?.name && mail.from?.address" class="from-addr">{{ mail.from.address }}</span>
+            </div>
+            <div class="meta-recipient">
+              <span class="meta-caption">收件人</span>
+              <span class="meta-to">{{ mail.to?.map(t => t.name || t.address).join(', ') || '-' }}</span>
+            </div>
+            <div v-if="mail.cc && mail.cc.length" class="meta-recipient">
+              <span class="meta-caption">抄送</span>
+              <span class="meta-cc">{{ mail.cc.map(t => t.name || t.address).join(', ') }}</span>
+            </div>
+          </div>
+          <div class="meta-date">{{ formatFullDate(mail.date) }}</div>
+        </div>
 
-      <div v-if="mail.attachments && mail.attachments.length" class="mail-detail-attachments">
-        <h4 class="att-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          附件 ({{ mail.attachments.length }})
-        </h4>
-        <div class="att-list">
-          <div 
-            v-for="(att, i) in mail.attachments" 
-            :key="i" 
-            class="att-item"
-            @click="handleDownload(i, att.filename)"
-            title="点击下载附件"
-          >
+        <div class="mail-detail-body selectable" ref="bodyRef" @click="handleBodyClick">
+          <div
+            v-if="mail.html"
+            v-html="deferredHtml"
+            class="mail-html-content"
+            :class="{ 'dynamic-theme': dynamicMailTheme }"
+          ></div>
+          <pre v-else-if="mail.text" class="mail-text-content">{{ mail.text }}</pre>
+          <p v-else class="mail-no-content">（邮件无内容）</p>
+        </div>
+
+        <div v-if="mail.attachments && mail.attachments.length" class="mail-detail-attachments">
+          <h4 class="att-title">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
-            <span class="att-name">{{ att.filename }}</span>
-            <span class="att-size">{{ formatSize(att.size) }}</span>
+            附件 ({{ mail.attachments.length }})
+          </h4>
+          <div class="att-list">
+            <div
+              v-for="(att, i) in mail.attachments"
+              :key="i"
+              class="att-item"
+              @click="handleDownload(i, att.filename)"
+              title="点击下载附件"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5"/>
+              </svg>
+              <span class="att-name">{{ att.filename }}</span>
+              <span class="att-size">{{ formatSize(att.size) }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -155,6 +172,12 @@
                 <path v-if="!mail?.seen" d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
               <span>{{ mail?.seen ? '标记为未读' : '标记为已读' }}</span>
+            </div>
+            <div class="ctx-item" @click="ctxAction('toggleStar')">
+              <svg width="14" height="14" viewBox="0 0 24 24" :fill="mail?.flagged ? '#f39c12' : 'none'">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" :stroke="mail?.flagged ? '#f39c12' : 'currentColor'" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>{{ mail?.flagged ? '取消星标' : '标记星标' }}</span>
             </div>
             <div class="ctx-item" @click="ctxAction('reply')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -212,7 +235,6 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import WindowControls from './WindowControls.vue'
 
 const props = defineProps({
   mail: Object,
@@ -223,11 +245,11 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['reply', 'delete', 'compose', 'markRead', 'markUnread', 'moveTrash', 'forward'])
+const emit = defineEmits(['reply', 'delete', 'compose', 'markRead', 'markUnread', 'moveTrash', 'forward', 'toggleStar'])
 
 // --- 性能优化：内容延迟加载与解析 ---
 const deferredHtml = ref('')
-let renderTimer = null
+let renderFrame = null
 
 // 使用 DOMParser 进行高效清理，替代性能较差的正则
 function getSanitizedHtml(html) {
@@ -279,19 +301,17 @@ function getSanitizedHtml(html) {
   }
 }
 
-// 监听邮件变化，执行延迟渲染
+// 等一帧再清理邮件 HTML，避免在列表切换时同步解析造成掉帧。
 watch(() => props.mail, (newMail) => {
-  if (renderTimer) clearTimeout(renderTimer)
-  
-  // 1. 先清空内容，防止旧内容的 DOM 操作干扰新动画
+  if (renderFrame !== null) cancelAnimationFrame(renderFrame)
+  // Do not keep the previous message's HTML visible while the new body is
+  // scheduled for parsing; otherwise WebKit can briefly flash the old email.
   deferredHtml.value = ''
-  
   if (newMail && newMail.html) {
-    // 2. 延迟渲染：等待侧滑动画 (300ms) 开始后再插入 DOM
-    // 这样就不会在动画第一帧由于 DOM 插入导致掉帧
-    renderTimer = setTimeout(() => {
+    renderFrame = requestAnimationFrame(() => {
       deferredHtml.value = getSanitizedHtml(newMail.html)
-    }, 50) 
+      renderFrame = null
+    })
   }
 }, { immediate: true })
 
@@ -364,6 +384,9 @@ function ctxAction(action) {
         sel.addRange(range)
       }
       break
+    case 'toggleStar':
+      emit('toggleStar', props.mail)
+      break
     case 'toggleRead':
       if (props.mail.seen) {
         emit('markUnread', props.mail)
@@ -404,34 +427,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', closeContext)
+  if (renderFrame !== null) cancelAnimationFrame(renderFrame)
 })
 // --- 右键菜单结束 ---
-
-function getAvatarColor(email) {
-  const colors = [
-    'linear-gradient(135deg, #6c5ce7, #a29bfe)',
-    'linear-gradient(135deg, #00cec9, #55efc4)',
-    'linear-gradient(135deg, #fd79a8, #e84393)',
-    'linear-gradient(135deg, #fdcb6e, #f39c12)',
-    'linear-gradient(135deg, #74b9ff, #0984e3)',
-    'linear-gradient(135deg, #55efc4, #00b894)',
-    'linear-gradient(135deg, #fab1a0, #e17055)',
-  ]
-  let hash = 0
-  for (let i = 0; i < (email || '').length; i++) {
-    hash = email.charCodeAt(i) + ((hash << 5) - hash)
-  }
-  return colors[Math.abs(hash) % colors.length]
-}
-
-function getInitial(name) {
-  if (!name) return '?'
-  const trimmed = name.trim()
-  if (/[\u4e00-\u9fa5]/.test(trimmed)) {
-    return trimmed.charAt(trimmed.length - 1)
-  }
-  return trimmed.charAt(0).toUpperCase()
-}
 
 function formatFullDate(dateStr) {
   if (!dateStr) return ''
@@ -505,11 +503,29 @@ async function handleDownload(index, filename) {
   position: relative;
 }
 
-.main-window-controls {
+.detail-refresh-indicator {
   position: absolute;
+  z-index: 2;
   top: 0;
+  left: 0;
   right: 0;
-  z-index: 1000;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.detail-refresh-indicator::after {
+  content: '';
+  display: block;
+  width: 30%;
+  height: 100%;
+  background: var(--primary-light);
+  animation: detail-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes detail-progress {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(430%); }
 }
 
 .mailcontent-empty {
@@ -521,6 +537,20 @@ async function handleDownload(index, filename) {
   gap: 16px;
   color: var(--text-tertiary);
   font-size: 14px;
+}
+
+.mail-detail-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: mail-detail-enter 0.2s ease both;
+}
+
+@keyframes mail-detail-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .empty-icon {
@@ -605,26 +635,23 @@ async function handleDownload(index, filename) {
   border-color: rgba(255, 107, 107, 0.3);
 }
 
+.action-btn.star-btn.active {
+  color: #f39c12;
+  border-color: rgba(243, 156, 18, 0.4);
+  background: rgba(243, 156, 18, 0.12);
+}
+
+.action-btn.star-btn:hover {
+  color: #f39c12;
+}
+
 /* 邮件元信息 */
 .mail-detail-meta {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 12px 24px;
+  gap: 20px;
+  padding: 10px 24px 14px;
   border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0;
-}
-
-.meta-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: 16px;
-  font-weight: 600;
   flex-shrink: 0;
 }
 
@@ -643,6 +670,20 @@ async function handleDownload(index, filename) {
   flex-wrap: wrap;
 }
 
+.meta-recipient {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.meta-caption {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .from-name {
   font-size: 14px;
   font-weight: 600;
@@ -657,6 +698,8 @@ async function handleDownload(index, filename) {
 .meta-to, .meta-cc {
   font-size: 12px;
   color: var(--text-tertiary);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .meta-date {
@@ -664,6 +707,7 @@ async function handleDownload(index, filename) {
   color: var(--text-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
+  padding-top: 2px;
 }
 
 /* 邮件正文 */

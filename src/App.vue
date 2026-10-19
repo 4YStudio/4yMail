@@ -11,70 +11,66 @@
         @switchAccount="id => currentAccountId = id"
       />
       <Transition :name="transitionName" mode="out-in">
-        <template v-if="currentView === 'settings'">
-          <SettingsPanel
-            :key="'settings'"
-            :accounts="accounts"
-            :pollingInterval="pollingInterval"
-            :zoomLevel="zoomLevel"
-            :autoStart="autoStart"
-            :dynamicMailTheme="dynamicMailTheme"
-            :connectingIds="Array.from(connectingIds)"
-            @updateInterval="val => pollingInterval = val"
-            @updateZoom="val => zoomLevel = val"
-            @updateAutoStart="val => autoStart = val"
-            @updateDynamicMailTheme="val => dynamicMailTheme = val"
-            @reconnect="handleConnect"
-            @addAccount="onAddAccount"
-            @updateAccount="onUpdateAccount"
-            @deleteAccount="onDeleteAccount"
+        <SettingsPanel
+          v-if="currentView === 'settings'"
+          key="settings"
+          :accounts="accounts"
+          :pollingInterval="pollingInterval"
+          :zoomLevel="zoomLevel"
+          :autoStart="autoStart"
+          :dynamicMailTheme="dynamicMailTheme"
+          :connectingIds="Array.from(connectingIds)"
+          @updateInterval="val => pollingInterval = val"
+          @updateZoom="val => zoomLevel = val"
+          @updateAutoStart="val => autoStart = val"
+          @updateDynamicMailTheme="val => dynamicMailTheme = val"
+          @reconnect="handleConnect"
+          @addAccount="onAddAccount"
+          @updateAccount="onUpdateAccount"
+          @deleteAccount="onDeleteAccount"
+        />
+        <ComposeMail
+          v-else-if="currentView === 'compose'"
+          key="compose"
+          :accountConfig="currentAccount || accounts[0]"
+          :replyTo="replyToMail"
+          @sent="handleMailSent"
+          @back="currentView = lastMailView"
+          @notif="n => showNotif(n.message, n.type)"
+        />
+        <div v-else class="mail-view-layout" key="mails">
+          <MailList
+            :mails="mails"
+            :selectedMail="selectedMailUid"
+            :currentFolder="currentFolder"
+            :loading="loadingList"
+            :folders="folders"
+            @select="handleSelectMail"
+            @refresh="handleRefresh"
+            @changeFolder="handleChangeFolder"
+            @markRead="handleMarkRead"
+            @markUnread="handleMarkUnread"
+            @reply="handleCtxReply"
+            @delete="handleCtxDelete"
+            @moveTrash="handleMoveTrash"
+            @copyAddr="handleCopyAddr"
           />
-        </template>
-        <template v-else-if="currentView === 'compose'">
-          <ComposeMail
-            :key="'compose'"
-            :accountConfig="currentAccount || accounts[0]"
-            :replyTo="replyToMail"
-            @sent="handleMailSent"
-            @back="currentView = lastMailView"
-            @notif="n => showNotif(n.message, n.type)"
-          />
-        </template>
-        <template v-else>
-          <div class="mail-view-layout" :key="'mails'">
-            <MailList
-              :mails="mails"
-              :selectedMail="selectedMailUid"
-              :currentFolder="currentFolder"
-              :loading="loadingList"
-              :folders="folders"
-              @select="handleSelectMail"
-              @refresh="handleRefresh"
-              @changeFolder="handleChangeFolder"
-              @markRead="handleMarkRead"
-              @markUnread="handleMarkUnread"
-              @reply="handleCtxReply"
-              @delete="handleCtxDelete"
-              @moveTrash="handleMoveTrash"
-              @copyAddr="handleCopyAddr"
+          <Transition name="content-slide" mode="out-in">
+            <MailContent
+              :key="selectedMailUid"
+              :mail="currentMailDetail"
+              :loading="loadingDetail"
+              :dynamicMailTheme="dynamicMailTheme"
+              @reply="handleReply"
+              @delete="handleDelete"
+              @compose="currentView = 'compose'; replyToMail = null;"
+              @markRead="handleMarkReadFromContent"
+              @markUnread="handleMarkUnreadFromContent"
+              @moveTrash="handleMoveTrashFromContent"
+              @forward="handleForward"
             />
-            <Transition name="content-slide" mode="out-in">
-              <MailContent
-                :key="selectedMailUid"
-                :mail="currentMailDetail"
-                :loading="loadingDetail"
-                :dynamicMailTheme="dynamicMailTheme"
-                @reply="handleReply"
-                @delete="handleDelete"
-                @compose="currentView = 'compose'; replyToMail = null;"
-                @markRead="handleMarkReadFromContent"
-                @markUnread="handleMarkUnreadFromContent"
-                @moveTrash="handleMoveTrashFromContent"
-                @forward="handleForward"
-              />
-            </Transition>
-          </div>
-        </template>
+          </Transition>
+        </div>
       </Transition>
     </div>
 

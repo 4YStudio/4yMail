@@ -1,5 +1,5 @@
 <template>
-  <div class="window-controls" data-tauri-drag-region>
+  <div class="window-controls">
     <button class="ctrl-btn minimize" @click="minimize" title="最小化">
       <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2"/></svg>
     </button>
@@ -14,18 +14,6 @@
 
 <script setup>
 const isElectron = typeof window !== 'undefined' && window.electronAPI
-
-import { invoke } from '@tauri-apps/api/core'
-
-function startDrag(e) {
-  if (e.button !== 0) return // 仅响应左键
-  if (!isElectron) {
-    // 尝试调用我们自己写的 Rust 后端拖动方法
-    invoke('start_drag').catch(err => {
-      console.warn('Failed to start dragging via rust:', err)
-    })
-  }
-}
 
 function minimize() {
   if (isElectron) window.electronAPI.minimize()

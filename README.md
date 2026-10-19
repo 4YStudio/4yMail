@@ -84,6 +84,9 @@ pnpm tauri dev
 
 ```sh
 pnpm tauri build
+
+# 只生成一种安装包；支持 appimage、deb、rpm、nsis、dmg
+pnpm tauri build:deb
 ```
 
 ---

@@ -1,6 +1,6 @@
 [package]
 name = "forymail"
-version = "1.0.7"
+version = "1.1.0"
 description = "A modern, glassmorphism-style email client."
 authors = ["Henvei"]
 edition = "2021"
@@ -13,10 +13,11 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+notify-rust = "4"
 tauri-plugin-autostart = "2"
 tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }

@@ -72,6 +72,8 @@ pub struct MailEnvelope {
 pub struct MailListResult {
     pub messages: Vec<MailEnvelope>,
     pub total: u32,
+    #[serde(rename = "unreadCount")]
+    pub unread_count: u32,
     pub page: u32,
     #[serde(rename = "pageSize")]
     pub page_size: u32,
@@ -97,6 +99,8 @@ pub struct MailDetail {
     pub html: Option<String>,
     pub text: Option<String>,
     pub attachments: Vec<MailAttachment>,
+    pub seen: bool,
+    pub flagged: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,36 +180,41 @@ fn decode_header(s: Option<&[u8]>) -> String {
 
 // ========== 邮件连接 ==========
 
+#[derive(Debug)]
 pub struct MailConnection {
     session: imap::Session<TlsStream<TcpStream>>,
+    #[allow(dead_code)]
     pub config: ImapConfig,
 }
 
 impl MailConnection {
     pub fn connect(config: &ImapConfig) -> Result<Self, String> {
         let tls = TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
             .build()
             .map_err(|e| format!("TLS 初始化失败: {}", e))?;
 
         let addr = (config.host.as_str(), config.port);
         // 核心修复：增加 IO 超时，防止死锁
         let timeout = std::time::Duration::from_secs(10);
-        let tcp_stream = std::net::TcpStream::connect_timeout(&addr.to_socket_addrs().unwrap().next().unwrap(), timeout)
+        let socket_addr = addr.to_socket_addrs()
+            .map_err(|e| format!("解析 IMAP 服务器地址失败: {}", e))?
+            .next()
+            .ok_or_else(|| "IMAP 服务器没有可用地址".to_string())?;
+        let tcp_stream = std::net::TcpStream::connect_timeout(&socket_addr, timeout)
             .map_err(|e| format!("TCP 连接超时: {}", e))?;
-        tcp_stream.set_read_timeout(Some(timeout)).unwrap();
-        tcp_stream.set_write_timeout(Some(timeout)).unwrap();
+        tcp_stream.set_read_timeout(Some(timeout)).map_err(|e| format!("设置读取超时失败: {}", e))?;
+        tcp_stream.set_write_timeout(Some(timeout)).map_err(|e| format!("设置写入超时失败: {}", e))?;
 
         let session = if config.secure {
             let tls_stream = tls.connect(&config.host, tcp_stream)
                 .map_err(|e| format!("TLS 握手失败: {}", e))?;
-            let mut client = imap::Client::new(tls_stream);
+            let client = imap::Client::new(tls_stream);
             client.login(&config.user, &config.pass)
                 .map_err(|(e, _)| format!("IMAP 登录失败: {}", e))?
         } else {
             // STARTTLS 稍微复杂一点，先用普通 client 建立连接并发送 STARTTLS
-            let mut client = imap::Client::new(tcp_stream);
-            let mut tls_client = client.secure(&config.host, &tls)
+            let client = imap::Client::new(tcp_stream);
+            let tls_client = client.secure(&config.host, &tls)
                 .map_err(|e| format!("STARTTLS 升级失败: {}", e))?;
             tls_client.login(&config.user, &config.pass)
                 .map_err(|(e, _)| format!("IMAP 登录失败: {}", e))?
@@ -218,6 +227,7 @@ impl MailConnection {
     }
 
     pub fn is_connected(&mut self) -> bool {
+        // 给 NOOP 设置更短的超时，避免长时间阻塞
         self.session.noop().is_ok()
     }
 
@@ -272,25 +282,66 @@ impl MailConnection {
         Ok(result)
     }
 
-    pub fn get_messages(&mut self, folder: &str, page: u32, page_size: u32) -> Result<MailListResult, String> {
+    pub fn get_messages(
+        &mut self,
+        folder: &str,
+        page: u32,
+        page_size: u32,
+        query: Option<&str>,
+        unread_only: bool,
+        flagged_only: bool,
+    ) -> Result<MailListResult, String> {
         let mailbox = self.session.select(folder)
             .map_err(|e| format!("选择文件夹失败: {}", e))?;
 
-        let total = mailbox.exists;
-        if total == 0 {
-            return Ok(MailListResult {
-                messages: vec![],
-                total,
-                page,
-                page_size,
-            });
+        let _folder_total = mailbox.exists;
+        let unread_count = self.session.search("UNSEEN")
+            .map_err(|e| format!("获取未读数量失败: {}", e))?
+            .len() as u32;
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 200);
+        let query = query.map(str::trim).filter(|query| !query.is_empty());
+        let mut criteria = Vec::new();
+        let mut search_charset = None;
+        if unread_only {
+            criteria.push("UNSEEN".to_string());
         }
+        if flagged_only {
+            criteria.push("FLAGGED".to_string());
+        }
+        if let Some(query) = query {
+            let query: String = query.chars().filter(|ch| !ch.is_control()).take(200).collect();
+            let escaped = query.replace('\\', "\\\\").replace('"', "\\\"");
+            if !escaped.trim().is_empty() {
+                if !query.is_ascii() {
+                    search_charset = Some("CHARSET UTF-8 ");
+                }
+                criteria.push(format!("OR SUBJECT \"{}\" OR FROM \"{}\" TO \"{}\"", escaped, escaped, escaped));
+            }
+        }
+        let criteria = if criteria.is_empty() {
+            "ALL".to_string()
+        } else {
+            format!("{}{}", search_charset.unwrap_or(""), criteria.join(" "))
+        };
+        let mut uids: Vec<u32> = self.session.uid_search(&criteria)
+            .map_err(|e| format!("搜索邮件失败: {}", e))?
+            .into_iter()
+            .collect();
+        uids.sort_unstable_by(|a, b| b.cmp(a));
+        let matching_total = uids.len() as u32;
+        let offset = u64::from(page - 1) * u64::from(page_size);
+        if offset >= u64::from(matching_total) {
+            return Ok(MailListResult { messages: vec![], total: matching_total, unread_count, page, page_size });
+        }
+        let page_uids = uids.iter()
+            .skip(offset as usize)
+            .take(page_size as usize)
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
 
-        let start = std::cmp::max(1, total as i64 - (page * page_size) as i64 + 1) as u32;
-        let end = std::cmp::max(1, total as i64 - ((page - 1) * page_size) as i64) as u32;
-        let range = format!("{}:{}", start, end);
-
-        let fetches = self.session.fetch(&range, "(FLAGS ENVELOPE UID RFC822.SIZE)")
+        let fetches = self.session.uid_fetch(&page_uids, "(FLAGS ENVELOPE UID RFC822.SIZE)")
             .map_err(|e| format!("获取邮件列表失败: {}", e))?;
 
         let mut messages = Vec::new();
@@ -308,10 +359,10 @@ impl MailConnection {
             let seen = fetch.flags().iter().any(|f| matches!(f, imap::types::Flag::Seen));
             let flagged = fetch.flags().iter().any(|f| matches!(f, imap::types::Flag::Flagged));
 
-            let subject = decode_header(envelope.subject.as_deref());
-            if subject.is_empty() {
-                " (无主题)".to_string();
-            }
+            let subject = match decode_header(envelope.subject.as_deref()) {
+                value if value.trim().is_empty() => "(无主题)".to_string(),
+                value => value,
+            };
 
             let from = envelope.from.as_ref()
                 .and_then(|addrs| addrs.first())
@@ -349,20 +400,24 @@ impl MailConnection {
             });
         }
 
-        messages.sort_by(|a, b| b.date.cmp(&a.date));
+        // IMAP sequence ranges are fetched newest-first by position; sort by UID to
+        // keep ordering stable even when server date headers use differing formats.
+        messages.sort_by(|a, b| b.uid.cmp(&a.uid));
 
-        Ok(MailListResult { messages, total, page, page_size })
+        Ok(MailListResult { messages, total: matching_total, unread_count, page, page_size })
     }
 
     pub fn get_message(&mut self, folder: &str, uid: u32) -> Result<MailDetail, String> {
         self.session.select(folder)
             .map_err(|e| format!("选择文件夹失败: {}", e))?;
 
-        let fetches = self.session.uid_fetch(uid.to_string(), "RFC822")
+        let fetches = self.session.uid_fetch(uid.to_string(), "(FLAGS RFC822)")
             .map_err(|e| format!("获取邮件详情失败: {}", e))?;
 
         let fetch = fetches.iter().next()
             .ok_or_else(|| "邮件未找到".to_string())?;
+
+        let flagged = fetch.flags().iter().any(|f| matches!(f, imap::types::Flag::Flagged));
 
         let body = fetch.body()
             .ok_or_else(|| "邮件内容为空".to_string())?;
@@ -425,25 +480,33 @@ impl MailConnection {
             });
         }
 
-        Ok(MailDetail { uid, subject, from, to, cc, date, html, text, attachments })
+        Ok(MailDetail { uid, subject, from, to, cc, date, html, text, attachments, seen: true, flagged })
     }
 
-    pub fn delete_message(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+    pub fn delete_messages(&mut self, folder: &str, uids: &[u32]) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
         self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
-        self.session.uid_store(uid.to_string(), "+FLAGS (\\Deleted)")
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        self.session.uid_store(&uids_str, "+FLAGS (\\Deleted)")
             .map_err(|e| format!("标记删除失败: {}", e))?;
         self.session.expunge().map_err(|e| format!("清除失败: {}", e))?;
         Ok(())
     }
 
-    pub fn move_message(&mut self, folder: &str, uid: u32, destination: &str) -> Result<(), String> {
+    pub fn delete_message(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+        self.delete_messages(folder, &[uid])
+    }
+
+    pub fn move_messages(&mut self, folder: &str, uids: &[u32], destination: &str) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
         self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
-        match self.session.uid_mv(uid.to_string(), destination) {
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        match self.session.uid_mv(&uids_str, destination) {
             Ok(_) => Ok(()),
             Err(_) => {
-                self.session.uid_copy(uid.to_string(), destination)
+                self.session.uid_copy(&uids_str, destination)
                     .map_err(|e| format!("复制邮件失败: {}", e))?;
-                self.session.uid_store(uid.to_string(), "+FLAGS (\\Deleted)")
+                self.session.uid_store(&uids_str, "+FLAGS (\\Deleted)")
                     .map_err(|e| format!("标记删除失败: {}", e))?;
                 self.session.expunge().map_err(|e| format!("清除失败: {}", e))?;
                 Ok(())
@@ -451,22 +514,62 @@ impl MailConnection {
         }
     }
 
-    pub fn mark_seen(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+    pub fn move_message(&mut self, folder: &str, uid: u32, destination: &str) -> Result<(), String> {
+        self.move_messages(folder, &[uid], destination)
+    }
+
+    pub fn mark_messages_seen(&mut self, folder: &str, uids: &[u32]) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
         self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
-        self.session.uid_store(uid.to_string(), "+FLAGS (\\Seen)")
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        self.session.uid_store(&uids_str, "+FLAGS (\\Seen)")
             .map_err(|e| format!("标记已读失败: {}", e))?;
         Ok(())
     }
 
-    pub fn mark_unseen(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+    pub fn mark_seen(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+        self.mark_messages_seen(folder, &[uid])
+    }
+
+    pub fn mark_messages_unseen(&mut self, folder: &str, uids: &[u32]) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
         self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
-        self.session.uid_store(uid.to_string(), "-FLAGS (\\Seen)")
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        self.session.uid_store(&uids_str, "-FLAGS (\\Seen)")
             .map_err(|e| format!("标记未读失败: {}", e))?;
         Ok(())
     }
 
-    pub fn append_message(&mut self, folder: &str, content: &str, _flags: &[&str]) -> Result<(), String> {
-        self.session.append(folder, content.as_bytes())
+    pub fn mark_unseen(&mut self, folder: &str, uid: u32) -> Result<(), String> {
+        self.mark_messages_unseen(folder, &[uid])
+    }
+
+    pub fn mark_messages_flagged(&mut self, folder: &str, uids: &[u32]) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
+        self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        self.session.uid_store(&uids_str, "+FLAGS (\\Flagged)")
+            .map_err(|e| format!("标记星标失败: {}", e))?;
+        Ok(())
+    }
+
+    pub fn mark_messages_unflagged(&mut self, folder: &str, uids: &[u32]) -> Result<(), String> {
+        if uids.is_empty() { return Ok(()); }
+        self.session.select(folder).map_err(|e| format!("选择文件夹失败: {}", e))?;
+        let uids_str = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+        self.session.uid_store(&uids_str, "-FLAGS (\\Flagged)")
+            .map_err(|e| format!("取消星标失败: {}", e))?;
+        Ok(())
+    }
+
+    pub fn append_message(&mut self, folder: &str, content: &str, flags: &[&str]) -> Result<(), String> {
+        let parsed_flags: Vec<imap::types::Flag<'_>> = flags.iter().map(|flag| match *flag {
+            "\\Draft" => imap::types::Flag::Draft,
+            "\\Seen" => imap::types::Flag::Seen,
+            "\\Flagged" => imap::types::Flag::Flagged,
+            _ => imap::types::Flag::Custom(std::borrow::Cow::Borrowed(*flag)),
+        }).collect();
+        self.session.append_with_flags(folder, content.as_bytes(), &parsed_flags)
             .map_err(|e| format!("追加邮件失败: {}", e))?;
         Ok(())
     }

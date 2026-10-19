@@ -16,10 +16,18 @@ const appWindow = getCurrentWindow();
 window.__IS_TAURI__ = true;
 
 // 全局通知点击监听：点击任何通知都唤回并聚焦主窗口
-onAction(() => {
-  appWindow.show();
-  appWindow.focus();
-});
+try {
+  if (typeof onAction === 'function') {
+    Promise.resolve(onAction(() => {
+      appWindow.show();
+      appWindow.focus();
+    })).catch(err => {
+      console.warn('[Notification] onAction registration warning:', err);
+    });
+  }
+} catch (err) {
+  console.warn('[Notification] onAction not supported:', err);
+}
 
 window.electronAPI = {
   // ========== 窗口控制 ==========
@@ -58,6 +66,26 @@ window.electronAPI = {
 
   markUnseen: (params) => invoke('mail_mark_unseen', { params }),
 
+  batchMarkSeen: (params) => invoke('mail_batch_mark_seen', { params }),
+
+  batchMarkUnseen: (params) => invoke('mail_batch_mark_unseen', { params }),
+
+  batchDeleteMail: (params) => invoke('mail_batch_delete', { params }),
+
+  batchMoveMail: (params) => invoke('mail_batch_move', { params }),
+
+  markFlagged: (params) => {
+    const p = { ...params };
+    if (p.uid && !p.uids) p.uids = [p.uid];
+    return invoke('mail_mark_flagged', { params: p });
+  },
+
+  markUnflagged: (params) => {
+    const p = { ...params };
+    if (p.uid && !p.uids) p.uids = [p.uid];
+    return invoke('mail_mark_unflagged', { params: p });
+  },
+
   saveDraft: (params) => invoke('mail_save_draft', { params }),
  
   updatePollingInterval: (interval) => invoke('mail_update_polling', { interval }),
@@ -71,6 +99,7 @@ window.electronAPI = {
   testConnectionError: () => invoke('test_connection_error'),
   testClearCache: () => invoke('test_clear_cache'),
   testOpenLogs: () => invoke('test_open_logs'),
+  openDevtools: () => invoke('open_devtools'),
  
   showNotification: (title, body) => invoke('test_notification', { title, body }), // 兼容以前的调用
  
@@ -115,6 +144,10 @@ window.electronAPI = {
   onNewMailArrived: (callback) => {
     listen('mail-new-arrived', (event) => callback(event.payload));
   },
+
+  onUnreadCount: (callback) => {
+    listen('mail-unread-count', (event) => callback(event.payload));
+  },
  
   onRefreshAll: (callback) => {
     listen('mail-refresh-all', () => callback());
@@ -130,6 +163,10 @@ window.electronAPI = {
  
   onConnectionSuccess: (callback) => {
     listen('mail-connection-success', (event) => callback(event.payload));
+  },
+
+  onNotificationClicked: (callback) => {
+    listen('mail-notification-clicked', (event) => callback(event.payload));
   },
 
   // ========== 应用设置 ==========

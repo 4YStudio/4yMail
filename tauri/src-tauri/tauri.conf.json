@@ -1,7 +1,7 @@
 {
-  "productName": "4yMail",
-  "version": "1.0.7",
-  "identifier": "com.forymail.client",
+  "productName": "4YMail",
+  "version": "1.1.0",
+  "identifier": "com.fourymail.client",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "4yMail",
+        "title": "4YMail",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -28,7 +28,7 @@
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": false,
-      "tooltip": "4yMail"
+      "tooltip": "4YMail"
     }
   },
   "bundle": {

@@ -1,12 +1,12 @@
 {
   "name": "4ymail-tauri",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "tauri": "tauri"
+    "tauri": "node ./scripts/tauri.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

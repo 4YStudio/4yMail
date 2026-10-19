@@ -1,19 +1,22 @@
 <template>
   <div class="app-container" :style="isTauri ? rootStyle : {}">
-    <div class="window-drag-region" data-tauri-drag-region @mousedown="startDrag"></div>
+    <div class="window-drag-region" data-tauri-drag-region></div>
+    <WindowControls class="app-window-controls" />
     <div class="app-body">
       <SideNav
         :activeView="currentView"
         :accounts="accounts"
+        :unreadTotal="accounts.filter(a => a.enabled !== false).reduce((sum, a) => sum + (a.unreadCount || 0), 0)"
         :currentAccountId="currentAccountId"
         @navigate="handleNavigate"
         @switchFolder="handleSwitchFolder"
         @switchAccount="id => currentAccountId = id"
       />
-      <Transition :name="transitionName" mode="out-in">
-        <template v-if="currentView === 'settings'">
+      <div class="app-view-host">
+        <Transition :name="transitionName" mode="out-in">
           <SettingsPanel
-            :key="'settings'"
+            v-if="currentView === 'settings'"
+            key="settings"
             :accounts="accounts"
             :pollingInterval="pollingInterval"
             :zoomLevel="zoomLevel"
@@ -28,39 +31,52 @@
             @addAccount="onAddAccount"
             @updateAccount="onUpdateAccount"
             @deleteAccount="onDeleteAccount"
+            @toggleAccount="handleToggleAccount"
           />
-        </template>
-        <template v-else-if="currentView === 'compose'">
           <ComposeMail
-            :key="'compose'"
+            v-else-if="currentView === 'compose'"
+            key="compose"
             :accountConfig="currentAccount || accounts[0]"
             :replyTo="replyToMail"
             @sent="handleMailSent"
             @back="currentView = lastMailView"
             @notif="n => showNotif(n.message, n.type)"
           />
-        </template>
-        <template v-else>
-          <div class="mail-view-layout" :key="'mails'">
+          <div v-else class="mail-view-layout" key="mails">
             <MailList
               :mails="mails"
               :selectedMail="selectedMailUid"
               :currentFolder="currentFolder"
               :loading="loadingList"
               :folders="folders"
+              :page="mailPage"
+              :total="mailTotal"
+              :query="mailQuery"
+              :unreadOnly="unreadOnly"
+              :flaggedOnly="flaggedOnly"
               @select="handleSelectMail"
               @refresh="handleRefresh"
               @changeFolder="handleChangeFolder"
               @markRead="handleMarkRead"
               @markUnread="handleMarkUnread"
+              @toggleStar="handleToggleStar"
               @reply="handleCtxReply"
               @delete="handleCtxDelete"
               @moveTrash="handleMoveTrash"
               @copyAddr="handleCopyAddr"
+              @page-change="handlePageChange"
+              @search-change="handleSearchChange"
+              @unread-change="handleUnreadFilterChange"
+              @flagged-change="handleFlaggedFilterChange"
+              @batchMarkRead="handleBatchMarkRead"
+              @batchMarkUnread="handleBatchMarkUnread"
+              @batchToggleStar="handleBatchToggleStar"
+              @batchMoveTrash="handleBatchMoveTrash"
+              @batchDelete="handleBatchDelete"
             />
-            <Transition name="content-slide" mode="out-in">
+            <div class="mail-content-pane">
               <MailContent
-                :key="selectedMailUid"
+                key="mail-content"
                 :mail="currentMailDetail"
                 :loading="loadingDetail"
                 :dynamicMailTheme="dynamicMailTheme"
@@ -70,12 +86,13 @@
                 @markRead="handleMarkReadFromContent"
                 @markUnread="handleMarkUnreadFromContent"
                 @moveTrash="handleMoveTrashFromContent"
+                @toggleStar="handleToggleStarFromContent"
                 @forward="handleForward"
               />
-            </Transition>
+            </div>
           </div>
-        </template>
-      </Transition>
+        </Transition>
+      </div>
     </div>
 
     <!-- 状态栏通知 -->
@@ -95,11 +112,18 @@ import MailList from './components/MailList.vue'
 import MailContent from './components/MailContent.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ComposeMail from './components/ComposeMail.vue'
+import WindowControls from './components/WindowControls.vue'
 
 const currentView = ref('inbox')
 const lastMailView = ref('inbox')
 const currentFolder = ref('INBOX')
 const mails = ref([])
+const mailPage = ref(1)
+const mailTotal = ref(0)
+const mailQuery = ref('')
+const unreadOnly = ref(false)
+const flaggedOnly = ref(false)
+const MAIL_PAGE_SIZE = 20
 const folders = ref([])
 const selectedMailUid = ref(null)
 const currentMailDetail = shallowRef(null)
@@ -116,6 +140,8 @@ const zoomLevel = ref(100) // 100%
 const autoStart = ref(false)
 const dynamicMailTheme = ref(true)
 const connectingIds = ref(new Set())
+let refreshGeneration = 0
+let detailGeneration = 0
 
 // 当前选中账号的对象
 const currentAccount = computed(() => {
@@ -131,9 +157,9 @@ const transitionName = computed(() => {
 
 const connected = computed(() => {
   if (currentAccountId.value === 'unified') {
-    return accounts.value.some(a => a.connected)
+    return accounts.value.some(a => a.enabled !== false && a.connected)
   }
-  return currentAccount.value?.connected || false
+  return currentAccount.value?.enabled !== false && (currentAccount.value?.connected || false)
 })
 
 // 检测当前运行环境
@@ -141,18 +167,7 @@ const isTauri = typeof window !== 'undefined' && window.__IS_TAURI__
 const isElectron = typeof window !== 'undefined' && window.electronAPI && !isTauri
 const isDesktop = isTauri || isElectron
 
-import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
-function startDrag(e) {
-  // 只响应左键点击
-  if (e.button !== 0) return
-  // 如果是 Tauri，尝试使用自定义的 Rust 原生拖拽 API
-  if (isTauri) {
-    invoke('start_drag').catch(err => {
-      console.warn('Failed to start dragging via rust:', err)
-    })
-  }
-}
 
 // 将 reactive 对象转为纯对象，避免 Electron IPC 克隆错误
 function toPlain(obj) {
@@ -187,14 +202,14 @@ onMounted(async () => {
     }
   }
 
-  const savedAccounts = localStorage.getItem('4ymail-accounts')
+  const savedAccounts = localStorage.getItem('4ymail-accounts') || localStorage.getItem('forymail-accounts')
   if (savedAccounts) {
     try {
-      accounts.value = JSON.parse(savedAccounts).map(a => ({ ...a, connected: false, folders: [] }))
+      accounts.value = JSON.parse(savedAccounts).map(a => ({ ...a, enabled: a.enabled !== false, unreadCount: 0, connected: false, folders: [] }))
     } catch {}
   }
 
-  const savedSettings = localStorage.getItem('4ymail-settings')
+  const savedSettings = localStorage.getItem('4ymail-settings') || localStorage.getItem('forymail-settings')
   if (savedSettings) {
     try {
       const settings = JSON.parse(savedSettings)
@@ -233,7 +248,7 @@ onMounted(async () => {
     window.electronAPI.onConnectionSuccess(async ({ accountId }) => {
       console.log(`[IPC] Connection Success for ${accountId}`);
       const acc = accounts.value.find(a => a.id === accountId)
-      if (acc) {
+      if (acc && acc.enabled !== false) {
         acc.connected = true
         showNotif(`账号 ${accountId} 已自动重新连接`, 'success')
         // 获取文件夹并刷新
@@ -256,6 +271,12 @@ onMounted(async () => {
         handleRefresh()
       }
     })
+    if (typeof window.electronAPI.onUnreadCount === 'function') {
+      window.electronAPI.onUnreadCount(({ accountId, count }) => {
+        const acc = accounts.value.find(a => a.id === accountId)
+        if (acc) acc.unreadCount = Number(count) || 0
+      })
+    }
     window.electronAPI.onNotifMessage(({ message, type }) => {
       showNotif(message, type)
     })
@@ -278,13 +299,40 @@ onMounted(async () => {
         new Audio('sounds/message-sound.mp3').play().catch(() => {});
       }
     })
+
+    if (window.electronAPI.onNotificationClicked) {
+      window.electronAPI.onNotificationClicked(async (payload) => {
+        console.log('[Notification Clicked] Navigating with payload:', payload);
+        const { accountId, uid, folder } = payload || {};
+        
+        currentView.value = 'inbox';
+        lastMailView.value = 'inbox';
+
+        if (accountId && accounts.value.some(a => a.id === accountId)) {
+          currentAccountId.value = accountId;
+        }
+
+        currentFolder.value = folder || 'INBOX';
+        await handleRefresh();
+
+        if (uid) {
+          selectedMailUid.value = uid;
+          const found = mails.value.find(m => m.uid === uid);
+          if (found) {
+            await handleSelectMail(found);
+          } else {
+            await handleSelectMail({ uid, accountId: accountId || currentAccountId.value });
+          }
+        }
+      });
+    }
   }
  
   // 自动连接所有已保存的账号
   setTimeout(async () => {
     console.log('[AutoConnect] Starting. Accounts found:', accounts.value.length)
     for (const acc of accounts.value) {
-      if (acc.imap.host && acc.imap.user && !acc.connected) {
+      if (acc.enabled !== false && acc.imap.host && acc.imap.user && !acc.connected) {
         console.log('[AutoConnect] Connecting:', acc.id)
         await handleConnect(acc.id)
       }
@@ -295,7 +343,7 @@ onMounted(async () => {
 // 监听账号变化持久化
 watch(accounts, (newVal) => {
   const toSave = newVal.map(a => {
-    const { connected, folders, ...rest } = a
+    const { connected, folders, unreadCount, ...rest } = a
     return rest
   })
   localStorage.setItem('4ymail-accounts', JSON.stringify(toSave))
@@ -310,8 +358,8 @@ watch(pollingInterval, (newVal) => {
 const rootStyle = computed(() => {
   const scale = zoomLevel.value / 100
   return {
-    transform: `scale(${scale})`,
-    transformOrigin: 'top left',
+    transform: scale === 1 ? 'none' : `scale(${scale})`,
+    transformOrigin: scale === 1 ? undefined : 'top left',
     width: `${100 / scale}%`,
     height: `${100 / scale}%`
   }
@@ -348,6 +396,12 @@ function saveSettings() {
 
 // 切换账号时自动加载文件夹和邮件
 watch(currentAccountId, async (newId) => {
+  refreshGeneration++
+  detailGeneration++
+  loadingList.value = false
+  loadingDetail.value = false
+  mailPage.value = 1
+  mailTotal.value = 0
   selectedMailUid.value = null
   currentMailDetail.value = null
 
@@ -366,6 +420,9 @@ watch(currentAccountId, async (newId) => {
   if (connected.value) {
     mails.value = [] // 切换账号时清空
     await handleRefresh()
+  } else {
+    mails.value = []
+    mailTotal.value = 0
   }
 })
 
@@ -380,9 +437,17 @@ function handleSwitchFolder(folder) {
   // 从侧边栏切换文件夹
   const targetFolder = findMatchingFolder(folder)
   currentFolder.value = targetFolder
+  mailPage.value = 1
+  mailTotal.value = 0
   selectedMailUid.value = null
   currentMailDetail.value = null
   mails.value = [] // 切换文件夹时清空
+  unreadOnly.value = false
+  flaggedOnly.value = false
+  refreshGeneration++
+  detailGeneration++
+  loadingList.value = false
+  loadingDetail.value = false
   if (connected.value) {
     handleRefresh()
   }
@@ -455,7 +520,7 @@ function onAddAccount(acc) {
     showNotif('该账号已存在', 'warning')
     return
   }
-  accounts.value.push({ ...acc, connected: false, folders: [] })
+  accounts.value.push({ ...acc, enabled: acc.enabled !== false, unreadCount: 0, connected: false, folders: [] })
   handleConnect(acc.id)
 }
 
@@ -478,6 +543,40 @@ async function onDeleteAccount(id) {
   }
 }
 
+async function handleToggleAccount(accountId, enable) {
+  const acc = accounts.value.find(a => a.id === accountId)
+  if (!acc) return
+
+  if (enable) {
+    acc.enabled = true
+    await handleConnect(accountId)
+    return
+  }
+
+  acc.enabled = false
+  try {
+    await window.electronAPI.disconnect(accountId)
+  } catch (err) {
+    showNotif(`停用账号失败: ${err.message || err}`, 'error')
+    acc.enabled = true
+    return
+  }
+
+  acc.connected = false
+  acc.folders = []
+  acc.unreadCount = 0
+  mails.value = mails.value.filter(mail => mail.accountId !== accountId)
+  if (currentMailDetail.value?.accountId === accountId) {
+    selectedMailUid.value = null
+    currentMailDetail.value = null
+  }
+  if (currentAccountId.value === accountId) {
+    folders.value = []
+  }
+  showNotif(`账号 ${accountId} 已停用`, 'info')
+  if (currentAccountId.value === 'unified') await handleRefresh()
+}
+
 
 async function handleConnect(accountId) {
   if (!isDesktop) {
@@ -486,19 +585,26 @@ async function handleConnect(accountId) {
   }
   const acc = accounts.value.find(a => a.id === accountId)
   if (!acc) return
+  if (acc.enabled === false) return
 
-  if (connectingIds.value.has(accountId)) return // 已经在连接中
+  if (connectingIds.value.has(accountId)) return
 
   try {
     connectingIds.value.add(accountId)
-    loadingList.value = true
+
+    if (acc.connected) {
+      try {
+        await window.electronAPI.disconnect(acc.id)
+      } catch {}
+      acc.connected = false
+    }
+
     const res = await window.electronAPI.connect({
       imap: toPlain(acc.imap),
       smtp: toPlain(acc.smtp)
     })
     if (res.success) {
       acc.connected = true
-      // 获取文件夹
       const fRes = await window.electronAPI.getFolders(acc.id)
       if (fRes.success) {
         acc.folders = fRes.data
@@ -507,7 +613,6 @@ async function handleConnect(accountId) {
         }
       }
       
-      // 如果当前正在查看该账号，刷新
       if (currentAccountId.value === acc.id || currentAccountId.value === 'unified') {
         await handleRefresh()
       }
@@ -518,7 +623,6 @@ async function handleConnect(accountId) {
     showNotif(`连接失败: ${err.message}`, 'error')
   } finally {
     connectingIds.value.delete(accountId)
-    loadingList.value = false
   }
 }
 
@@ -543,9 +647,10 @@ async function handleDisconnect(accountId) {
 
 async function handleRefresh() {
   if (!isDesktop) return
+  const generation = ++refreshGeneration
 
   // 先尝试重连断开的账号
-  const disconnected = accounts.value.filter(a => !a.connected && a.imap.host && a.imap.user)
+  const disconnected = accounts.value.filter(a => a.enabled !== false && !a.connected && a.imap.host && a.imap.user)
   if (disconnected.length > 0) {
     for (const acc of disconnected) {
       try {
@@ -553,6 +658,7 @@ async function handleRefresh() {
           imap: toPlain(acc.imap),
           smtp: toPlain(acc.smtp)
         })
+        if (generation !== refreshGeneration) return
         if (res.success) {
           acc.connected = true
           const fRes = await window.electronAPI.getFolders(acc.id)
@@ -568,8 +674,11 @@ async function handleRefresh() {
     }
   }
 
+  if (generation !== refreshGeneration) return
+
   if (!connected.value) {
     mails.value = []
+    mailTotal.value = 0
     loadingList.value = false
     return
   }
@@ -578,47 +687,173 @@ async function handleRefresh() {
   try {
     if (currentAccountId.value === 'unified') {
       const allMails = []
+      let total = 0
+      const needed = mailPage.value * MAIL_PAGE_SIZE
       for (const acc of accounts.value) {
-        if (!acc.connected) continue
-        // 为每个账号独立解析实际的文件夹路径
+        if (acc.enabled === false || !acc.connected) continue
         const realFolder = resolveFolder(currentFolder.value, acc.folders || [])
-        const res = await window.electronAPI.getMessages({
-          accountId: acc.id,
-          folder: realFolder,
-          page: 1,
-          pageSize: 30,
-        })
-        if (res.success) {
-          allMails.push(...res.data.messages.map(m => ({ ...m, accountId: acc.id })))
+        const batchSize = Math.min(200, needed)
+        const batchCount = Math.ceil(needed / batchSize)
+        for (let batchPage = 1; batchPage <= batchCount; batchPage++) {
+          const res = await window.electronAPI.getMessages({
+            accountId: acc.id,
+            folder: realFolder,
+            page: batchPage,
+            pageSize: batchSize,
+            query: mailQuery.value || null,
+            unreadOnly: unreadOnly.value,
+            flaggedOnly: flaggedOnly.value,
+          })
+          if (generation !== refreshGeneration) return
+          if (res.success) {
+            if (batchPage === 1) {
+              total += Number(res.data.total) || 0
+              updateInboxUnreadCount(acc, realFolder, res.data.unreadCount)
+            }
+            allMails.push(...res.data.messages.map(m => ({ ...m, accountId: acc.id })))
+            if (res.data.messages.length < batchSize) break
+          } else {
+            if (res.error && (res.error.includes('未连接') || res.error.includes('断开'))) acc.connected = false
+            else showNotif(`加载 ${acc.id} 邮件失败: ${res.error}`, 'error')
+            break
+          }
         }
       }
-      allMails.sort((a, b) => new Date(b.date) - new Date(a.date))
-      mails.value = allMails
+      allMails.sort((a, b) => (new Date(b.date).getTime() || 0) - (new Date(a.date).getTime() || 0))
+      const lastPage = Math.max(1, Math.ceil(total / MAIL_PAGE_SIZE))
+      if (mailPage.value > lastPage) {
+        mailPage.value = lastPage
+        await handleRefresh()
+        return
+      }
+      const offset = (mailPage.value - 1) * MAIL_PAGE_SIZE
+      mails.value = allMails.slice(offset, offset + MAIL_PAGE_SIZE)
+      mailTotal.value = total
     } else {
       const acc = accounts.value.find(a => a.id === currentAccountId.value)
       const realFolder = resolveFolder(currentFolder.value, acc?.folders || [])
       const res = await window.electronAPI.getMessages({
         accountId: currentAccountId.value,
         folder: realFolder,
-        page: 1,
-        pageSize: 50,
+        page: mailPage.value,
+        pageSize: MAIL_PAGE_SIZE,
+        query: mailQuery.value || null,
+        unreadOnly: unreadOnly.value,
+        flaggedOnly: flaggedOnly.value,
       })
+      if (generation !== refreshGeneration) return
       if (res.success) {
+        const total = Number(res.data.total) || 0
+        const lastPage = Math.max(1, Math.ceil(total / MAIL_PAGE_SIZE))
+        if (mailPage.value > lastPage) {
+          mailPage.value = lastPage
+          await handleRefresh()
+          return
+        }
+        if (acc) updateInboxUnreadCount(acc, realFolder, res.data.unreadCount)
         mails.value = res.data.messages.map(m => ({ ...m, accountId: currentAccountId.value }))
+        mailTotal.value = total
+      } else if (res.error && (res.error.includes('未连接') || res.error.includes('断开'))) {
+        if (acc) acc.connected = false
+        showNotif(`账号 ${currentAccountId.value} 连接已断开，正在尝试重连...`, 'warning')
+        if (acc && acc.imap.host && acc.imap.user) {
+          try {
+            const reconnectRes = await window.electronAPI.connect({
+              imap: toPlain(acc.imap),
+              smtp: toPlain(acc.smtp)
+            })
+            if (reconnectRes.success) {
+              acc.connected = true
+              const fRes = await window.electronAPI.getFolders(acc.id)
+              if (fRes.success) {
+                acc.folders = fRes.data
+                if (currentAccountId.value === acc.id) {
+                  folders.value = acc.folders
+                }
+              }
+              showNotif(`账号 ${acc.id} 已重新连接`, 'success')
+              const retryRes = await window.electronAPI.getMessages({
+                accountId: currentAccountId.value,
+                folder: realFolder,
+                page: mailPage.value,
+                pageSize: MAIL_PAGE_SIZE,
+                query: mailQuery.value || null,
+                unreadOnly: unreadOnly.value,
+                flaggedOnly: flaggedOnly.value,
+              })
+              if (generation !== refreshGeneration) return
+              if (retryRes.success) {
+                mails.value = retryRes.data.messages.map(m => ({ ...m, accountId: currentAccountId.value }))
+                mailTotal.value = Number(retryRes.data.total) || 0
+              }
+            } else {
+              showNotif(`重连失败: ${reconnectRes.error}`, 'error')
+            }
+          } catch (err) {
+            showNotif(`重连失败: ${err.message}`, 'error')
+          }
+        }
+      } else {
+        showNotif(`加载邮件失败: ${res.error}`, 'error')
       }
     }
   } catch (err) {
-    showNotif('刷新失败: ' + err.message, 'error')
+    if (generation === refreshGeneration) showNotif('刷新失败: ' + err.message, 'error')
   } finally {
-    loadingList.value = false
+    if (generation === refreshGeneration) loadingList.value = false
   }
 }
 
 async function handleChangeFolder(folder) {
+  detailGeneration++
+  loadingDetail.value = false
   currentFolder.value = folder
+  mailPage.value = 1
+  mailTotal.value = 0
+  unreadOnly.value = false
+  flaggedOnly.value = false
   selectedMailUid.value = null
   currentMailDetail.value = null
   await handleRefresh()
+}
+
+function handlePageChange(page) {
+  detailGeneration++
+  loadingDetail.value = false
+  mailPage.value = Math.max(1, page)
+  selectedMailUid.value = null
+  currentMailDetail.value = null
+  handleRefresh()
+}
+
+function handleSearchChange(query) {
+  detailGeneration++
+  loadingDetail.value = false
+  mailQuery.value = query
+  mailPage.value = 1
+  selectedMailUid.value = null
+  currentMailDetail.value = null
+  handleRefresh()
+}
+
+function handleUnreadFilterChange(enabled) {
+  detailGeneration++
+  loadingDetail.value = false
+  unreadOnly.value = enabled
+  mailPage.value = 1
+  selectedMailUid.value = null
+  currentMailDetail.value = null
+  handleRefresh()
+}
+
+function handleFlaggedFilterChange(enabled) {
+  detailGeneration++
+  loadingDetail.value = false
+  flaggedOnly.value = enabled
+  mailPage.value = 1
+  selectedMailUid.value = null
+  currentMailDetail.value = null
+  handleRefresh()
 }
 
 async function handleSelectMail(mail) {
@@ -628,6 +863,7 @@ async function handleSelectMail(mail) {
   
   selectedMailUid.value = uid
   if (!isDesktop) return
+  const generation = ++detailGeneration
   
   try {
     loadingDetail.value = true
@@ -641,19 +877,45 @@ async function handleSelectMail(mail) {
       folder: realFolder,
       uid,
     })
+    if (generation !== detailGeneration) return
     if (res.success) {
       currentMailDetail.value = { ...res.data, accountId, folder: realFolder }
       // 更新列表中的已读状态
       const idx = mails.value.findIndex(m => m.uid === uid && (m.accountId === accountId))
-      if (idx !== -1) mails.value[idx].seen = true
+      if (idx !== -1 && !mails.value[idx].seen) {
+        mails.value[idx].seen = true
+        adjustUnreadCount(accountId, -1, realFolder)
+      }
     } else {
       showNotif('加载邮件失败: ' + res.error, 'error')
     }
   } catch (err) {
+    if (generation !== detailGeneration) return
     showNotif('加载邮件失败: ' + err.message, 'error')
   } finally {
-    loadingDetail.value = false
+    if (generation === detailGeneration) loadingDetail.value = false
   }
+}
+
+function isInboxFolder(account, folder) {
+  return folder === 'INBOX' || account?.folders?.some(f => f.path === folder && f.specialUse === '\\Inbox')
+}
+
+function updateInboxUnreadCount(account, folder, count) {
+  if (isInboxFolder(account, folder)) account.unreadCount = Number(count) || 0
+}
+
+function adjustUnreadCount(accountId, delta, folder) {
+  const acc = accounts.value.find(a => a.id === accountId)
+  if (acc && isInboxFolder(acc, folder)) {
+    acc.unreadCount = Math.max(0, (Number(acc.unreadCount) || 0) + delta)
+  }
+}
+
+function removeMailFromList(uid, accountId, folder) {
+  const mail = mails.value.find(item => item.uid === uid && item.accountId === accountId)
+  if (mail && !mail.seen) adjustUnreadCount(accountId, -1, folder)
+  mails.value = mails.value.filter(item => !(item.uid === uid && item.accountId === accountId))
 }
 
 function handleReply(mail) {
@@ -669,7 +931,7 @@ function handleForward(mail) {
 
 // 从邮件详情页标记已读
 async function handleMarkReadFromContent(mail) {
-  if (!isElectron || !mail) return
+  if (!isDesktop || !mail) return
   const accountId = mail.accountId || currentAccountId.value
   if (accountId === 'unified') return
   const acc = accounts.value.find(a => a.id === accountId)
@@ -678,7 +940,10 @@ async function handleMarkReadFromContent(mail) {
     const res = await window.electronAPI.markSeen({ accountId, folder, uid: mail.uid })
     if (res.success) {
       const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
-      if (idx !== -1) mails.value[idx].seen = true
+      if (idx !== -1 && !mails.value[idx].seen) {
+        mails.value[idx].seen = true
+        adjustUnreadCount(accountId, -1, folder)
+      }
       if (currentMailDetail.value) currentMailDetail.value.seen = true
       showNotif('已标记为已读', 'success')
     }
@@ -689,7 +954,7 @@ async function handleMarkReadFromContent(mail) {
 
 // 从邮件详情页标记未读
 async function handleMarkUnreadFromContent(mail) {
-  if (!isElectron || !mail) return
+  if (!isDesktop || !mail) return
   const accountId = mail.accountId || currentAccountId.value
   if (accountId === 'unified') return
   const acc = accounts.value.find(a => a.id === accountId)
@@ -698,7 +963,10 @@ async function handleMarkUnreadFromContent(mail) {
     const res = await window.electronAPI.markUnseen({ accountId, folder, uid: mail.uid })
     if (res.success) {
       const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
-      if (idx !== -1) mails.value[idx].seen = false
+      if (idx !== -1 && mails.value[idx].seen) {
+        mails.value[idx].seen = false
+        adjustUnreadCount(accountId, 1, folder)
+      }
       if (currentMailDetail.value) currentMailDetail.value.seen = false
       showNotif('已标记为未读', 'success')
     }
@@ -709,7 +977,7 @@ async function handleMarkUnreadFromContent(mail) {
 
 // 从邮件详情页移至垃圾箱
 async function handleMoveTrashFromContent(mail) {
-  if (!isElectron || !mail) return
+  if (!isDesktop || !mail) return
   const accountId = mail.accountId || currentAccountId.value
   if (accountId === 'unified') return
   const acc = accounts.value.find(a => a.id === accountId)
@@ -718,7 +986,7 @@ async function handleMoveTrashFromContent(mail) {
   try {
     const res = await window.electronAPI.moveMail({ accountId, folder, uid: mail.uid, destination: trashFolder })
     if (res.success) {
-      mails.value = mails.value.filter(m => !(m.uid === mail.uid && m.accountId === accountId))
+      removeMailFromList(mail.uid, accountId, folder)
       selectedMailUid.value = null
       currentMailDetail.value = null
       showNotif('已移至垃圾箱', 'success')
@@ -742,7 +1010,10 @@ async function handleMarkRead(mail) {
     const res = await window.electronAPI.markSeen({ accountId, folder, uid: mail.uid })
     if (res.success) {
       const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
-      if (idx !== -1) mails.value[idx].seen = true
+      if (idx !== -1 && !mails.value[idx].seen) {
+        mails.value[idx].seen = true
+        adjustUnreadCount(accountId, -1, folder)
+      }
     }
   } catch (err) {
     showNotif('操作失败: ' + err.message, 'error')
@@ -759,7 +1030,10 @@ async function handleMarkUnread(mail) {
     const res = await window.electronAPI.markUnseen({ accountId, folder, uid: mail.uid })
     if (res.success) {
       const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
-      if (idx !== -1) mails.value[idx].seen = false
+      if (idx !== -1 && mails.value[idx].seen) {
+        mails.value[idx].seen = false
+        adjustUnreadCount(accountId, 1, folder)
+      }
     }
   } catch (err) {
     showNotif('操作失败: ' + err.message, 'error')
@@ -793,7 +1067,7 @@ async function handleCtxDelete(mail) {
   try {
     const res = await window.electronAPI.deleteMail({ accountId, folder, uid: mail.uid })
     if (res.success) {
-      mails.value = mails.value.filter(m => !(m.uid === mail.uid && m.accountId === accountId))
+      removeMailFromList(mail.uid, accountId, folder)
       if (selectedMailUid.value === mail.uid) {
         selectedMailUid.value = null
         currentMailDetail.value = null
@@ -820,7 +1094,7 @@ async function handleMoveTrash(mail) {
   try {
     const res = await window.electronAPI.moveMail({ accountId, folder, uid: mail.uid, destination: trashFolder })
     if (res.success) {
-      mails.value = mails.value.filter(m => !(m.uid === mail.uid && m.accountId === accountId))
+      removeMailFromList(mail.uid, accountId, folder)
       if (selectedMailUid.value === mail.uid) {
         selectedMailUid.value = null
         currentMailDetail.value = null
@@ -861,7 +1135,7 @@ async function handleDelete(uid) {
       uid,
     })
     if (res.success) {
-      mails.value = mails.value.filter(m => !(m.uid === uid && m.accountId === accountId))
+      removeMailFromList(uid, accountId, realFolder)
       if (selectedMailUid.value === uid) {
         selectedMailUid.value = null
         currentMailDetail.value = null
@@ -872,6 +1146,264 @@ async function handleDelete(uid) {
     }
   } catch (err) {
     showNotif('删除失败: ' + err.message, 'error')
+  }
+}
+
+async function handleToggleStar(mail) {
+  if (!isDesktop || !mail) return
+  const accountId = mail.accountId || currentAccountId.value
+  if (!accountId || accountId === 'unified') return
+  const acc = accounts.value.find(a => a.id === accountId)
+  const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+  const newFlagged = !mail.flagged
+
+  try {
+    const res = newFlagged
+      ? await window.electronAPI.markFlagged({ accountId, folder, uids: [mail.uid] })
+      : await window.electronAPI.markUnflagged({ accountId, folder, uids: [mail.uid] })
+
+    if (res.success) {
+      const idx = mails.value.findIndex(m => m.uid === mail.uid && m.accountId === accountId)
+      if (idx !== -1) {
+        mails.value[idx].flagged = newFlagged
+      }
+      if (currentMailDetail.value && currentMailDetail.value.uid === mail.uid && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId)) {
+        currentMailDetail.value.flagged = newFlagged
+      }
+      showNotif(newFlagged ? '已添加星标' : '已取消星标', 'success')
+      if (flaggedOnly.value && !newFlagged) {
+        mails.value = mails.value.filter(m => !(m.uid === mail.uid && m.accountId === accountId))
+      }
+    } else {
+      showNotif('操作失败: ' + res.error, 'error')
+    }
+  } catch (err) {
+    showNotif('操作失败: ' + err.message, 'error')
+  }
+}
+
+async function handleToggleStarFromContent(mail) {
+  await handleToggleStar(mail)
+}
+
+function groupMailsByAccount(targetMails) {
+  const groups = new Map()
+  for (const mail of targetMails) {
+    const accId = mail.accountId || currentAccountId.value
+    if (!accId || accId === 'unified') continue
+    if (!groups.has(accId)) {
+      groups.set(accId, [])
+    }
+    groups.get(accId).push(mail)
+  }
+  return groups
+}
+
+async function handleBatchMarkRead(targetMails) {
+  if (!isDesktop || !targetMails || !targetMails.length) return
+  const groups = groupMailsByAccount(targetMails)
+  let successCount = 0
+
+  for (const [accountId, items] of groups.entries()) {
+    const acc = accounts.value.find(a => a.id === accountId)
+    const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+    const uids = items.map(m => m.uid)
+
+    try {
+      const res = await window.electronAPI.batchMarkSeen({ accountId, folder, uids })
+      if (res.success) {
+        const uidSet = new Set(uids)
+        let unreadDelta = 0
+        for (const m of mails.value) {
+          if (m.accountId === accountId && uidSet.has(m.uid)) {
+            if (!m.seen) {
+              m.seen = true
+              unreadDelta--
+            }
+          }
+        }
+        if (unreadDelta !== 0) {
+          adjustUnreadCount(accountId, unreadDelta, folder)
+        }
+        if (currentMailDetail.value && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId) && uidSet.has(currentMailDetail.value.uid)) {
+          currentMailDetail.value.seen = true
+        }
+        successCount += items.length
+      } else {
+        showNotif(`账号 ${accountId} 批量标为已读失败: ${res.error}`, 'error')
+      }
+    } catch (err) {
+      showNotif(`批量标为已读失败: ${err.message}`, 'error')
+    }
+  }
+
+  if (successCount > 0) {
+    showNotif(`已将 ${successCount} 封邮件标记为已读`, 'success')
+  }
+}
+
+async function handleBatchMarkUnread(targetMails) {
+  if (!isDesktop || !targetMails || !targetMails.length) return
+  const groups = groupMailsByAccount(targetMails)
+  let successCount = 0
+
+  for (const [accountId, items] of groups.entries()) {
+    const acc = accounts.value.find(a => a.id === accountId)
+    const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+    const uids = items.map(m => m.uid)
+
+    try {
+      const res = await window.electronAPI.batchMarkUnseen({ accountId, folder, uids })
+      if (res.success) {
+        const uidSet = new Set(uids)
+        let unreadDelta = 0
+        for (const m of mails.value) {
+          if (m.accountId === accountId && uidSet.has(m.uid)) {
+            if (m.seen) {
+              m.seen = false
+              unreadDelta++
+            }
+          }
+        }
+        if (unreadDelta !== 0) {
+          adjustUnreadCount(accountId, unreadDelta, folder)
+        }
+        if (currentMailDetail.value && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId) && uidSet.has(currentMailDetail.value.uid)) {
+          currentMailDetail.value.seen = false
+        }
+        successCount += items.length
+      } else {
+        showNotif(`账号 ${accountId} 批量标为未读失败: ${res.error}`, 'error')
+      }
+    } catch (err) {
+      showNotif(`批量标为未读失败: ${err.message}`, 'error')
+    }
+  }
+
+  if (successCount > 0) {
+    showNotif(`已将 ${successCount} 封邮件标记为未读`, 'success')
+  }
+}
+
+async function handleBatchToggleStar(targetMails, targetFlagged) {
+  if (!isDesktop || !targetMails || !targetMails.length) return
+  const groups = groupMailsByAccount(targetMails)
+  let successCount = 0
+
+  for (const [accountId, items] of groups.entries()) {
+    const acc = accounts.value.find(a => a.id === accountId)
+    const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+    const uids = items.map(m => m.uid)
+
+    try {
+      const res = targetFlagged
+        ? await window.electronAPI.markFlagged({ accountId, folder, uids })
+        : await window.electronAPI.markUnflagged({ accountId, folder, uids })
+
+      if (res.success) {
+        const uidSet = new Set(uids)
+        for (const m of mails.value) {
+          if (m.accountId === accountId && uidSet.has(m.uid)) {
+            m.flagged = targetFlagged
+          }
+        }
+        if (currentMailDetail.value && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId) && uidSet.has(currentMailDetail.value.uid)) {
+          currentMailDetail.value.flagged = targetFlagged
+        }
+        successCount += items.length
+      } else {
+        showNotif(`账号 ${accountId} 批量星标操作失败: ${res.error}`, 'error')
+      }
+    } catch (err) {
+      showNotif(`批量星标操作失败: ${err.message}`, 'error')
+    }
+  }
+
+  if (successCount > 0) {
+    showNotif(`已${targetFlagged ? '星标' : '取消星标'} ${successCount} 封邮件`, 'success')
+    if (flaggedOnly.value && !targetFlagged) {
+      await handleRefresh()
+    }
+  }
+}
+
+async function handleBatchMoveTrash(targetMails) {
+  if (!isDesktop || !targetMails || !targetMails.length) return
+  const groups = groupMailsByAccount(targetMails)
+  let successCount = 0
+
+  for (const [accountId, items] of groups.entries()) {
+    const acc = accounts.value.find(a => a.id === accountId)
+    const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+    const trashFolder = resolveFolder('Deleted Messages', acc?.folders || [])
+    const uids = items.map(m => m.uid)
+
+    try {
+      const res = await window.electronAPI.batchMoveMail({
+        accountId,
+        folder,
+        uids,
+        destination: trashFolder,
+      })
+      if (res.success) {
+        const uidSet = new Set(uids)
+        for (const m of items) {
+          removeMailFromList(m.uid, accountId, folder)
+        }
+        if (currentMailDetail.value && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId) && uidSet.has(currentMailDetail.value.uid)) {
+          selectedMailUid.value = null
+          currentMailDetail.value = null
+        }
+        successCount += items.length
+      } else {
+        showNotif(`账号 ${accountId} 移至垃圾箱失败: ${res.error}`, 'error')
+      }
+    } catch (err) {
+      showNotif(`批量移至垃圾箱失败: ${err.message}`, 'error')
+    }
+  }
+
+  if (successCount > 0) {
+    showNotif(`已将 ${successCount} 封邮件移至垃圾箱`, 'success')
+  }
+}
+
+async function handleBatchDelete(targetMails) {
+  if (!isDesktop || !targetMails || !targetMails.length) return
+  const groups = groupMailsByAccount(targetMails)
+  let successCount = 0
+
+  for (const [accountId, items] of groups.entries()) {
+    const acc = accounts.value.find(a => a.id === accountId)
+    const folder = resolveFolder(currentFolder.value, acc?.folders || [])
+    const uids = items.map(m => m.uid)
+
+    try {
+      const res = await window.electronAPI.batchDeleteMail({
+        accountId,
+        folder,
+        uids,
+      })
+      if (res.success) {
+        const uidSet = new Set(uids)
+        for (const m of items) {
+          removeMailFromList(m.uid, accountId, folder)
+        }
+        if (currentMailDetail.value && (currentMailDetail.value.accountId === accountId || !currentMailDetail.value.accountId) && uidSet.has(currentMailDetail.value.uid)) {
+          selectedMailUid.value = null
+          currentMailDetail.value = null
+        }
+        successCount += items.length
+      } else {
+        showNotif(`账号 ${accountId} 批量删除失败: ${res.error}`, 'error')
+      }
+    } catch (err) {
+      showNotif(`批量删除失败: ${err.message}`, 'error')
+    }
+  }
+
+  if (successCount > 0) {
+    showNotif(`已彻底删除 ${successCount} 封邮件`, 'success')
   }
 }
 
@@ -896,16 +1428,60 @@ function handleMailSent() {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  /* Keep the native drag surface away from the three window controls. */
+  right: 126px;
   height: 32px;
   -webkit-app-region: drag; /* 兼容 Electron */
   z-index: 10;
+}
+
+.app-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1001;
 }
 
 .app-body {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+
+.app-view-host {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  /* 强制锁定独立的 GPU 合成上下文，防止 WebKitGTK 在动画结束移出 class 时发生图层注销降级（Layer De-promotion）导致过期双缓冲画面（Stale Frame）闪烁 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.app-view-host > * {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.mail-content-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mail-content-pane > .mailcontent {
+  width: 100%;
+  height: 100%;
 }
 
 .mail-view-layout {

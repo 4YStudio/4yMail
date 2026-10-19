@@ -1,6 +1,5 @@
 <template>
   <div class="settings-panel">
-    <WindowControls class="settings-window-controls" />
     <div class="settings-header">
       <div class="settings-tabs">
         <button 
@@ -36,41 +35,53 @@
           <div v-if="accounts.length === 0" class="empty-state">
             <p>暂无账号，请点击上方按钮添加</p>
           </div>
-          <div 
-            v-for="acc in accounts" 
-            :key="acc.id" 
-            class="account-card"
-            @click="editingAccount = { ...acc }; isEditing = true; originalId = acc.id"
-          >
-            <div class="acc-info">
-              <div class="acc-avatar">{{ acc.id[0].toUpperCase() }}</div>
-              <div class="acc-details">
-                <div class="acc-name">{{ acc.id }}</div>
-                <div class="acc-host">{{ acc.imap.host }}</div>
+          <TransitionGroup name="account-list" tag="div" class="account-cards">
+            <div
+              v-for="acc in accounts"
+              :key="acc.id"
+              class="account-card"
+              @click="editingAccount = { ...acc }; isEditing = true; originalId = acc.id"
+            >
+              <div class="acc-info">
+                <div class="acc-details">
+                  <div class="acc-name">{{ acc.id }}</div>
+                  <div class="acc-host">IMAP · {{ acc.imap.host || '未配置服务器' }}</div>
+                </div>
+              </div>
+              <div class="acc-status">
+                <span class="status-badge" :class="{
+                  online: acc.enabled !== false && acc.connected && !connectingIds.includes(acc.id),
+                  busy: connectingIds.includes(acc.id)
+                }">
+                  {{ !acc.enabled ? '已停用' : (connectingIds.includes(acc.id) ? '连接中...' : (acc.connected ? '已连接' : '未连接')) }}
+                </span>
+                <button
+                  class="account-enable-toggle"
+                  :class="{ enabled: acc.enabled !== false }"
+                  :aria-pressed="acc.enabled !== false"
+                  :disabled="connectingIds.includes(acc.id)"
+                  :title="acc.enabled === false ? '启用账号' : '停用账号'"
+                  @click.stop="$emit('toggleAccount', acc.id, acc.enabled === false)"
+                >
+                  <span></span>
+                  {{ acc.enabled === false ? '启用' : '停用' }}
+                </button>
+                <button
+                  v-if="acc.enabled !== false && !connectingIds.includes(acc.id)"
+                  class="btn-icon-only"
+                  title="重连"
+                  @click.stop="$emit('reconnect', acc.id)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
               </div>
             </div>
-            <div class="acc-status">
-              <span class="status-badge" :class="{ 
-                online: acc.connected && !connectingIds.includes(acc.id),
-                busy: connectingIds.includes(acc.id)
-              }">
-                {{ connectingIds.includes(acc.id) ? '连接中...' : (acc.connected ? '已连接' : '未连接') }}
-              </span>
-              <button 
-                v-if="!connectingIds.includes(acc.id)"
-                class="btn-icon-only" 
-                title="重连"
-                @click.stop="$emit('reconnect', acc.id)"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-          </div>
+          </TransitionGroup>
         </div>
 
         <!-- 账号编辑/新增视图 -->
@@ -253,6 +264,51 @@
             </div>
           </div>
 
+          <!-- 调试工具箱（pnpm tauri dev 运行时自动显示） -->
+          <div v-if="isDev" class="settings-section dev-toolbox-section">
+            <h4 class="section-title">
+              <span class="section-title-text">🛠️ 调试工具箱</span>
+              <span class="badge dev-badge">开发调试模式 (pnpm tauri dev)</span>
+            </h4>
+            <div class="test-toolbox-grid">
+              <button class="btn-glass toolbox-btn" @click="handleTestNotification">
+                <span class="toolbox-icon">🔔</span>
+                <div class="toolbox-text">
+                  <div class="toolbox-title">测试系统通知</div>
+                  <div class="toolbox-desc">触发系统桌面通知与原生提示音</div>
+                </div>
+              </button>
+              <button class="btn-glass toolbox-btn" @click="handleTestError">
+                <span class="toolbox-icon">⚠️</span>
+                <div class="toolbox-text">
+                  <div class="toolbox-title">模拟连接异常</div>
+                  <div class="toolbox-desc">发送断开事件以测试自动重连</div>
+                </div>
+              </button>
+              <button class="btn-glass toolbox-btn" @click="handleTestClearCache">
+                <span class="toolbox-icon">🧹</span>
+                <div class="toolbox-text">
+                  <div class="toolbox-title">清空轮询缓存</div>
+                  <div class="toolbox-desc">重置 UID 游标以重新探测新邮件</div>
+                </div>
+              </button>
+              <button class="btn-glass toolbox-btn" @click="handleTestOpenLogs">
+                <span class="toolbox-icon">📂</span>
+                <div class="toolbox-text">
+                  <div class="toolbox-title">打开日志目录</div>
+                  <div class="toolbox-desc">浏览运行日志与诊断信息</div>
+                </div>
+              </button>
+              <button class="btn-glass toolbox-btn" @click="handleOpenDevtools">
+                <span class="toolbox-icon">🔍</span>
+                <div class="toolbox-text">
+                  <div class="toolbox-title">开发者工具 (DevTools)</div>
+                  <div class="toolbox-desc">呼出 Webview 元素审查与控制台</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
         </div>
       </Transition>
     </div>
@@ -262,7 +318,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import GlassSelect from './GlassSelect.vue'
-import WindowControls from './WindowControls.vue'
+
+const isDev = import.meta.env.DEV
 
 const secureOptions = [
   { label: 'SSL / TLS', value: true },
@@ -281,7 +338,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval', 'updateZoom', 'updateAutoStart', 'updateDynamicMailTheme', 'reconnect'])
+const emit = defineEmits(['addAccount', 'deleteAccount', 'updateAccount', 'updateInterval', 'updateZoom', 'updateAutoStart', 'updateDynamicMailTheme', 'reconnect', 'toggleAccount'])
 
 const currentTab = ref('accounts')
 const editingAccount = ref(null)
@@ -398,15 +455,80 @@ function handleTestOpenLogs() {
     window.electronAPI.testOpenLogs()
   }
 }
+
+function handleOpenDevtools() {
+  if (window.electronAPI && window.electronAPI.openDevtools) {
+    window.electronAPI.openDevtools()
+  }
+}
 </script>
 
 <style scoped>
+.dev-toolbox-section {
+  border: 1px dashed rgba(254, 202, 87, 0.4);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: rgba(254, 202, 87, 0.03);
+  margin-top: 24px;
+}
+
+.dev-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+  background: rgba(254, 202, 87, 0.15);
+  border: 1px solid rgba(254, 202, 87, 0.3);
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-left: 8px;
+}
+
 .test-toolbox-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 12px;
 }
+
+.toolbox-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.toolbox-btn:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--primary-light);
+  transform: translateY(-1px);
+}
+
+.toolbox-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.toolbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolbox-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toolbox-desc {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .settings-panel {
   flex: 1;
   display: flex;
@@ -414,13 +536,6 @@ function handleTestOpenLogs() {
   overflow: hidden;
   height: 100%;
   position: relative;
-}
-
-.settings-window-controls {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 1000;
 }
 
 .settings-header {
@@ -492,17 +607,47 @@ function handleTestOpenLogs() {
 .accounts-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 9px;
+}
+
+.account-cards {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.account-list-move {
+  transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.account-list-enter-active,
+.account-list-leave-active {
+  transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.account-list-enter-from,
+.account-list-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.995);
+}
+
+.account-list-leave-active {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
 }
 
 .account-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  gap: 16px;
+  padding: 14px 16px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -510,49 +655,79 @@ function handleTestOpenLogs() {
 .account-card:hover {
   background: var(--glass-bg-hover);
   border-color: var(--primary);
-  transform: translateY(-2px);
 }
 
 .acc-info {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.acc-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 18px;
+  flex: 1;
+  min-width: 0;
 }
 
 .acc-details {
   display: flex;
   flex-direction: column;
+  gap: 5px;
+  min-width: 0;
 }
 
 .acc-name {
   font-weight: 600;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .acc-host {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .acc-status {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex-shrink: 0;
   color: var(--text-tertiary);
+}
+
+.account-enable-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.account-enable-toggle span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.account-enable-toggle.enabled span {
+  background: var(--success);
+}
+
+.account-enable-toggle:hover {
+  background: var(--glass-bg-hover);
+}
+
+.account-enable-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .status-badge {

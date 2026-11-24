@@ -18,15 +18,19 @@
 ### 📂 Project Structure / 项目结构
 
 > [!IMPORTANT]
-> 本项目目前正处于架构迁移阶段，建议新用户直接使用 Tauri 版本。
+> 项目已全面迁移到 Tauri 2.0，旧的 Electron 版本已从仓库移除。
 
-- **`/tauri` (Recommended / 推荐)**:  
-  **New Refactored Version**. Built with Tauri 2.0 and Rust. Faster, smaller, and more secure.  
-  **全新重构版**。基于 Tauri 2.0 和 Rust 构建。体积更小、速度更快、更安全。
-  
-- **`/` (Legacy / 旧版)**:  
-  **Original Electron Version**. Maintenance only.  
-  **初始 Electron 版本**。目前仅处于维护状态。
+```
+.
+├── src/                  # Vue 3 前端
+├── src-tauri/            # Rust 后端（Tauri）
+│   ├── src/main.rs       # 入口（含 WebKitGTK 渲染器设置）
+│   ├── src/lib.rs        # 命令、IMAP/SMTP、后台轮询
+│   └── tauri.conf.json   # 窗口/打包配置
+├── public/               # 静态资源（图标、提示音）
+├── scripts/tauri.js      # 打包脚本入口（pnpm tauri ...）
+└── docs/                 # 排查记录
+```
 
 ---
 
@@ -59,7 +63,7 @@
 
 ---
 
-### 🚀 Getting Started / 快速开始 (Tauri Version)
+### 🚀 Getting Started / 快速开始
 
 #### Prerequisites / 前置准备
 - [Node.js](https://nodejs.org/) (v20+)
@@ -68,7 +72,6 @@
 
 #### Setup / 初始化
 ```sh
-cd tauri
 pnpm install
 ```
 
@@ -83,16 +86,54 @@ pnpm tauri dev
 > 建议使用 GitHub Actions 进行跨平台打包。
 
 ```sh
+# 全量打包（按 tauri.conf.json 的 targets 生成 deb/rpm/appimage）
 pnpm tauri build
 
-# 只生成一种安装包；支持 appimage、deb、rpm、nsis、dmg
-pnpm tauri build:deb
+# 只生成指定安装包；可选 appimage、deb、rpm、nsis、dmg
+pnpm tauri build --bundles deb
+
+# 指定目标架构（交叉/CI 用）
+pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm
 ```
+
+> [!NOTE]
+> **Linux 动画/s 闪烁相关**：应用启动时会默认设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+> （WebKitGTK ≥ 2.42 的 DMABUF renderer 在 AMD/NVIDIA + Wayland 上会让每个动画
+> 首尾闪一帧旧画面）。想要回 WebKit 默认的 DMABUF 路径可以：
+>
+> ```sh
+> FOURYMAIL_WEBKIT_RENDERER=dmabuf 4ymail   # 或 gpu / default
+> FOURYMAIL_WEBKIT_RENDERER=soft 4ymail     # 连加速合成一起关（仅排查用）
+> ```
+>
+> 成因、代价与量化验证方式见 [docs/tauri-webkitgtk-flicker.md](./docs/tauri-webkitgtk-flicker.md)。
 
 ---
 
 ### 📦 CI/CD / 自动化构建
-本项目已配置 GitHub Actions，在每次推送至 `main` 或发布 `tag` 时会自动构建 Windows 和 Linux 版本的安装包。
+
+GitHub Actions 会在推送 `main`、开 PR、手动触发以及打 `v*` tag 时构建 5 个平台的安装包：
+
+| 平台 | 目标 | 产物 |
+| --- | --- | --- |
+| Windows x64 | `x86_64-pc-windows-msvc` | NSIS 安装程序（`.exe`） |
+| Windows arm64 | `aarch64-pc-windows-msvc` | NSIS 安装程序（`.exe`） |
+| Linux x64 | `x86_64-unknown-linux-gnu` | `.deb` + `.rpm` |
+| Linux arm64 | `aarch64-unknown-linux-gnu`（原生 arm 运行器） | `.deb` + `.rpm` |
+| macOS | `universal-apple-darwin`（Intel + Apple Silicon 合一） | `.dmg` |
+
+每次都作为 workflow artifact 上传（保留 14 天）；打 `v*` tag 时还会汇总成一个 **draft Release**。
+
+> Linux arm64 使用 GitHub 的原生 arm 运行器（`ubuntu-22.04-arm`），公开仓库免费；
+> 私有仓库需要改用交叉编译（`cargo-zigbuild` + `--target aarch64-unknown-linux-gnu`
+> 并安装 arm64 的 webkit2gtk 开发包），或删掉 `linux-arm64` 那一行。
+
+---
+
+### 📝 Changelog / 更新日志
+
+见 [CHANGELOG.md](./CHANGELOG.md)。当前版本 **1.2.0**：默认关闭 WebKitGTK DMABUF
+renderer 修复动画闪烁、仓库改为纯 Tauri 结构、五平台 CI 打包。
 
 ---
 

@@ -1,4 +1,4 @@
-name: "Build & Release"
+name: Build & Release
 
 on:
   push:
@@ -6,56 +6,143 @@ on:
       - main
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'index.html'
+      - 'vite.config.js'
+      - 'tauri-bridge.js'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    permissions:
-      contents: write
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-22.04, windows-latest]
+        include:
+          # ── Windows：NSIS 安装程序（exe），x64 + arm64 ──
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
 
-    runs-on: ${{ matrix.platform }}
+          # ── Linux：deb + rpm，x64 + arm64 ──
+          #               arm64 用 GitHub 原生 arm 运行器（公开仓库免费；
+          #               私有仓库没有 arm 运行器时把 os 改成 ubuntu-22.04
+          #               并自行交叉编译，见文末说明）
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm
+
+          # ── macOS：dmg，单包同时装 x86_64 + arm64（universal） ──
+          - name: macos-universal
+            os: macos-latest
+            target: universal-apple-darwin
+            bundles: dmg
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
 
       - name: setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+          node-version: 22
+          cache: pnpm
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # universal 需要两个 mac 目标；其余平台用矩阵里的单一目标
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: install dependencies (linux only)
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev webkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            pkg-config \
+            patchelf \
+            rpm \
+            build-essential \
+            curl \
+            wget \
+            file
 
       - name: install frontend dependencies
-        working-directory: ./tauri
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: build tauri app
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: ./tauri
-          tagName: v__VERSION__ # tauri-action will replace __VERSION__ with the version in package.json
-          releaseName: "4yMail v__VERSION__"
-          releaseBody: "Automated release from GitHub Actions."
-          generateReleaseNotes: true
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4ymail-${{ matrix.name }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14
+
+  # 打 tag（v1.2.3）时，把上面所有安装包汇总成一个 draft Release
+  release:
+    name: create draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: list artifacts
+        run: find artifacts -type f | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: 4yMail ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*

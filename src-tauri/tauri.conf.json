@@ -1,6 +1,6 @@
 {
   "productName": "4YMail",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "identifier": "com.fourymail.client",
   "build": {
     "beforeDevCommand": "pnpm dev",

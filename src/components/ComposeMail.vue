@@ -1,6 +1,5 @@
 <template>
   <div class="compose-panel stagger-in">
-    <WindowControls class="compose-window-controls" />
     <div class="compose-header">
       <div class="header-left">
         <button class="back-btn" @click="$emit('back')">
@@ -66,9 +65,9 @@
 
       <!-- 编辑器工具栏 -->
       <div class="editor-toolbar">
-        <button @click="exec('bold')" title="加粗" class="tool-btn"><B>B</B></button>
-        <button @click="exec('italic')" title="斜体" class="tool-btn"><I>I</I></button>
-        <button @click="exec('underline')" title="下划线" class="tool-btn"><U>U</U></button>
+        <button @click="exec('bold')" title="加粗" class="tool-btn"><b>B</b></button>
+        <button @click="exec('italic')" title="斜体" class="tool-btn"><i>I</i></button>
+        <button @click="exec('underline')" title="下划线" class="tool-btn"><u>U</u></button>
         <div class="tool-divider"></div>
         <button @click="exec('insertOrderedList')" title="有序列表" class="tool-btn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -104,7 +103,6 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from 'vue'
-import WindowControls from './WindowControls.vue'
 
 const props = defineProps({
   accountConfig: Object,
@@ -219,7 +217,19 @@ async function handleSaveDraft() {
   savingDraft.value = true
   try {
     // 简单生成原始邮件格式（实际应使用专门的库生成 RFC822）
-    const draftContent = `Subject: ${mailData.subject}\nTo: ${mailData.to}\nContent-Type: text/html; charset=utf-8\n\n${mailData.body}`;
+    const safeHeader = value => String(value || '').replace(/[\r\n]+/g, ' ').trim()
+    const draftContent = [
+      `From: ${safeHeader(props.accountConfig.smtp.user || props.accountConfig.imap.user)}`,
+      `To: ${safeHeader(mailData.to)}`,
+      ...(mailData.cc ? [`Cc: ${safeHeader(mailData.cc)}`] : []),
+      `Subject: ${safeHeader(mailData.subject)}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      mailData.body,
+      ''
+    ].join('\r\n')
     
     const res = await window.electronAPI.saveDraft({
       accountId: props.accountConfig.id,
@@ -305,13 +315,6 @@ async function sendMail() {
   overflow: hidden;
   background: var(--bg-main);
   position: relative;
-}
-
-.compose-window-controls {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 1000;
 }
 
 .compose-header {

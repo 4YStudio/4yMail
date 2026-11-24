@@ -1052,6 +1052,9 @@ fn start_drag(window: tauri::Window) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 注意：WebKitGTK 的 DMABUF renderer 会导致动画闪烁，已在 src/main.rs 的
+    // configure_webkit_renderer() 里默认关掉（必须在 WebKit 初始化之前设置），
+    // 不要把那段逻辑挪到这里 —— run() 执行时 WebKit 已经起过进程。
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

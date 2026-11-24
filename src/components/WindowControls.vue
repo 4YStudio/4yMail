@@ -46,6 +46,14 @@ function closeWin() {
   cursor: pointer;
 }
 
+.ctrl-btn.drag {
+  cursor: grab;
+}
+
+.ctrl-btn.drag:active {
+  cursor: grabbing;
+}
+
 .ctrl-btn:hover {
   background: var(--glass-bg-hover);
   color: var(--text-primary);

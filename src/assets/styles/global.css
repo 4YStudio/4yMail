@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
 /* ===== 深色模式（默认）- 浅绿色主题 ===== */
 :root {
   /* 液态玻璃色彩系统 - 半透明无模糊 */
@@ -114,7 +112,7 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   color: var(--text-primary);
   background: var(--bg-base);
   user-select: none;
@@ -261,115 +259,95 @@ button:active {
   opacity: 0;
 }
 
-/* === 路由/页面切换核心动画 === */
+/* === 路由/页面切换核心动画 ===
+ *
+ * 闪烁的真正成因不在 CSS：WebKitGTK ≥ 2.42 的 DMABUF renderer 在 AMD/NVIDIA +
+ * Wayland 上会短暂显示图层的陈旧表面，任何动画的首尾都会抖一下。已在
+ * src-tauri/src/main.rs 里默认关掉（WEBKIT_DISABLE_DMABUF_RENDERER=1）。
+ * 详见 docs/tauri-webkitgtk-flicker.md。
+ *
+ * 关掉 DMABUF 后走共享内存 + Cairo：每帧成本与像素量成正比（2× 缩放下约
+ * 30–40 fps），所以这里的规则只剩三条要求：
+ *   1. 时长压在 160–220 ms（帧少，但肉眼是顺的；超过 300 ms 会明显发顿）；
+ *   2. 一次只让一个容器动（mode="out-in" 保证同一时刻只有一个视图在 DOM 里）；
+ *   3. 不给静止元素挂常驻的 will-change / translateZ(0) / contain: paint ——
+ *      那样每帧都要重新上传整个图层，帧率反而更低，也更容易闪。
+ */
 
-/* 1. 标准侧滑转场 (用于收件箱等主视图) */
+/* 视图是同一层上的绝对定位盒子：切换期间不参与父级 flex 重排，
+ * 也就不会出现「新视图回到 static、旧视图还是 absolute」的中间帧。
+ * 用 `.view.view` 把特异性提到 0,3,0，必然高于任何 `<style scoped>` 里
+ * 编译出的 `.xxx[data-v-xxxx]`（0,2,0），避免组件的盒子规则反过来把定位改掉。
+ * 这里故意不写 background：应用底色是 #app 上的径向渐变，
+ * 视图铺不透明底色会把那层渐变盖掉（视觉会变）。因为用的是 mode="out-in"，
+ * 同一时刻只有一个视图在 DOM 里，不需要底色去遮挡；底下的 leave 规则
+ * 只负责 "万一"（例如将来改成非 out-in）时旧节点不会盖回新页。 */
+.app-view-host > .view.view {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 进场只做位移，180 ms（30 fps 下大约 5–6 帧）。
+ * 不带 opacity：opacity 动画会把元素提升成独立图层，结束再回收，
+ * 又是一次不必要的图层状态变化。
+ * 位移量比原来小一半：大位移每帧要重新栅格化的面积更大，低配机上容易掉帧。 */
 .route-slide-enter-active,
-.route-slide-leave-active {
-  transition: all 0.45s cubic-bezier(0.3, 0.8, 0.3, 1);
+.route-compose-enter-active,
+.route-settings-enter-active {
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .route-slide-enter-from {
-  opacity: 0;
-  transform: translateX(30px);
-}
-
-.route-slide-leave-to {
-  opacity: 0;
-  transform: translateX(-30px);
-}
-
-/* 2. 写信专用弹起转场 (Compose Mail) */
-.route-compose-enter-active,
-.route-compose-leave-active {
-  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateX(24px);
 }
 
 .route-compose-enter-from {
-  opacity: 0;
-  transform: translateY(60px) scale(0.98);
-}
-
-.route-compose-leave-to {
-  opacity: 0;
-  transform: translateY(20px) scale(0.98);
-}
-
-/* 3. 设置专用缩放转场 (Settings) */
-.route-settings-enter-active,
-.route-settings-leave-active {
-  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+  transform: translateY(20px);
 }
 
 .route-settings-enter-from {
-  opacity: 0;
-  transform: scale(1.05);
+  transform: translateY(12px);
 }
 
-.route-settings-leave-to {
-  opacity: 0;
-  transform: scale(0.95);
-}
-
-/* 4. 邮件详情侧滑 (Content) */
-.content-slide-enter-active {
-  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.content-slide-leave-active {
-  transition: all 0.3s ease-in;
-}
-
-.content-slide-enter-from {
-  opacity: 0;
-  transform: translateX(40px);
-}
-
-.content-slide-leave-to {
-  opacity: 0;
-  transform: translateX(10px);
+/* 离场只降层级，不做任何视觉变化（不改透明度、不改尺寸）。 */
+.app-view-host > .view.view.route-slide-leave-active,
+.app-view-host > .view.view.route-compose-leave-active,
+.app-view-host > .view.view.route-settings-leave-active {
+  z-index: 0;
+  pointer-events: none;
 }
 
 /* 列表移动动画 (Vue TransitionGroup) */
-.list-move,
+.list-move {
+  transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
 .list-enter-active,
 .list-leave-active {
-  transition: all 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+  transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .list-enter-from,
 .list-leave-to {
   opacity: 0;
-  transform: translateY(20px) scale(0.95);
+  transform: translateY(4px);
 }
 
 .list-leave-active {
   position: absolute;
-  width: 100%;
-}
-
-/* 5. 阶梯式进入动画 (用于初始化列表) */
-@keyframes staggerFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.98);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.stagger-item {
-  animation: staggerFadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  animation-delay: calc(var(--i) * 0.05s);
+  left: 0;
+  right: 0;
+  pointer-events: none;
 }
 
 /* 6. 设置面板内部切换动画 */
 .settings-fade-enter-active,
 .settings-fade-leave-active {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .settings-fade-enter-from {
@@ -379,5 +357,27 @@ button:active {
 
 .settings-fade-leave-to {
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-4px);
+}
+
+.list-state-enter-active,
+.list-state-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.list-state-enter-from,
+.list-state-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -3,62 +3,27 @@
   "version": "1.1.0",
   "description": "A modern, glassmorphism-style email client.",
   "author": "Henvei <henvei@4ymail.com>",
+  "license": "MIT",
   "private": true,
   "type": "module",
-  "main": "electron/main.js",
+  "packageManager": "pnpm@12.14.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "NODE_ENV=development electron .",
-    "electron:build": "vite build && electron-builder --linux --win"
+    "tauri": "node ./scripts/tauri.js"
   },
   "dependencies": {
-    "vue": "^3.5.29",
-    "imapflow": "^1.0.171",
-    "nodemailer": "^6.10.1",
-    "mailparser": "^3.7.2"
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-shell": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-autostart": "^2",
+    "vue": "^3.5.29"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.4",
-    "electron": "^34.2.0",
-    "electron-builder": "^25.1.8",
-    "vite": "^7.3.1",
-    "vite-plugin-vue-devtools": "^8.0.6"
-  },
-  "engines": {
-    "node": "^20.19.0 || >=22.12.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild"
-    ]
-  },
-  "build": {
-    "appId": "com.4ymail.app",
-    "productName": "4yMail",
-    "icon": "public/logo.png",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*"
-    ],
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Network",
-      "icon": "public/logo.png"
-    },
-    "win": {
-      "target": [
-        "portable"
-      ],
-      "icon": "public/logo.png"
-    }
+    "vite": "^7.3.1"
   }
 }

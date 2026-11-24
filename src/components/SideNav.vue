@@ -14,9 +14,7 @@
             <path d="M22 6l-10 7L2 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <circle v-if="currentAccountId === 'unified'" cx="18" cy="18" r="4" fill="var(--primary)" stroke="var(--bg-sidenav)" stroke-width="2"/>
           </svg>
-          <div v-if="currentAccountId !== 'unified'" class="trigger-initial">
-             {{ getInitial(currentAccountId) }}
-          </div>
+          <span v-if="currentAccountId !== 'unified'" class="trigger-status" aria-hidden="true"></span>
         </div>
         <div class="arrow-indicator" :class="{ open: menuOpen }">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
@@ -42,6 +40,7 @@
                 </svg>
               </div>
               <span class="item-label">所有收件箱</span>
+              <span v-if="unreadTotal > 0" class="unread-count-badge">{{ formatUnread(unreadTotal) }}</span>
               <div v-if="currentAccountId === 'unified'" class="check-mark">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                   <path d="M20 6L9 17L4 12" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -62,9 +61,10 @@
               <div class="item-info">
                 <div class="item-label">{{ acc.id }}</div>
                 <div class="item-status" :class="{ online: acc.connected }">
-                  {{ acc.connected ? '已连接' : '已离线' }}
+                  {{ acc.enabled === false ? '已停用' : (acc.connected ? '已连接' : '已离线') }}
                 </div>
               </div>
+              <span v-if="acc.enabled !== false && acc.unreadCount > 0" class="unread-count-badge">{{ formatUnread(acc.unreadCount) }}</span>
               <div v-if="currentAccountId === acc.id" class="check-mark">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                   <path d="M20 6L9 17L4 12" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -77,6 +77,12 @@
     </div>
 
     <nav class="sidenav-items">
+      <span
+        v-if="activeNavIndex >= 0"
+        class="nav-selection-indicator"
+        :style="{ top: `${16 + activeNavIndex * 46}px` }"
+        aria-hidden="true"
+      ></span>
       <button
         v-for="item in navItems"
         :key="item.id"
@@ -86,6 +92,7 @@
         @click="handleClick(item)"
       >
         <div class="nav-icon" v-html="item.icon"></div>
+        <span v-if="item.id === 'inbox' && unreadTotal > 0" class="nav-unread-badge">{{ formatUnread(unreadTotal) }}</span>
       </button>
     </nav>
 
@@ -126,11 +133,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps({
   activeView: String,
   accounts: Array,
+  unreadTotal: { type: Number, default: 0 },
   currentAccountId: String,
 })
 
@@ -138,6 +146,10 @@ const emit = defineEmits(['navigate', 'switchFolder', 'switchAccount'])
 
 function getInitial(id) {
   return id ? id[0].toUpperCase() : '?'
+}
+
+function formatUnread(count) {
+  return count > 99 ? '99+' : String(count)
 }
 
 const isDark = ref(true)
@@ -229,6 +241,8 @@ const navItems = [
     </svg>`,
   },
 ]
+
+const activeNavIndex = computed(() => navItems.findIndex(item => item.id === props.activeView))
 </script>
 
 <style scoped>
@@ -246,12 +260,29 @@ const navItems = [
 }
 
 .sidenav-items {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   padding: 4px 0;
+}
+
+.nav-selection-indicator {
+  position: absolute;
+  z-index: 1;
+  left: 2px;
+  width: 3px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--primary-light);
+  pointer-events: none;
+  transition: top 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), background var(--transition-normal);
+}
+
+:root[data-theme="light"] .nav-selection-indicator {
+  background: var(--primary);
 }
 
 .account-switcher {
@@ -290,21 +321,22 @@ const navItems = [
   color: var(--primary-light);
 }
 
-.trigger-initial {
+.trigger-status {
   position: absolute;
-  bottom: 4px;
-  right: 4px;
-  width: 14px;
-  height: 14px;
-  background: var(--primary);
-  color: white;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  font-size: 9px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: var(--primary-light);
   border: 1.5px solid var(--bg-sidenav);
+  box-shadow: 0 0 0 2px rgba(0, 184, 148, 0.14);
+  animation: account-indicator-in 0.2s ease-out both;
+}
+
+@keyframes account-indicator-in {
+  from { opacity: 0; transform: scale(0.65); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .arrow-indicator {
@@ -373,9 +405,9 @@ const navItems = [
 }
 
 .item-icon, .item-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: var(--glass-bg);
   display: flex;
   align-items: center;
@@ -385,10 +417,17 @@ const navItems = [
 }
 
 .item-avatar {
+  background: rgba(0, 184, 148, 0.12);
+  color: var(--primary-light);
+  font-weight: 600;
+  font-size: 12px;
+  transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.popup-item.active .item-avatar {
   background: var(--primary);
   color: white;
-  font-weight: 700;
-  font-size: 14px;
+  transform: scale(1.04);
 }
 
 .item-info {
@@ -414,6 +453,23 @@ const navItems = [
   color: var(--success);
 }
 
+.unread-count-badge,
+.nav-unread-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 .check-mark {
   color: var(--primary);
 }
@@ -426,17 +482,17 @@ const navItems = [
 
 /* 动画 */
 .pop-in-enter-active, .pop-in-leave-active {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .pop-in-enter-from {
   opacity: 0;
-  transform: translateX(-10px) scale(0.95);
+  transform: translateX(-6px) scale(0.985);
 }
 
 .pop-in-leave-to {
   opacity: 0;
-  transform: translateX(-5px) scale(0.98);
+  transform: translateX(-3px) scale(0.99);
 }
 
 .sidenav-bottom {
@@ -461,6 +517,19 @@ const navItems = [
   transition: all var(--transition-fast);
 }
 
+.nav-item::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  width: 3px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--primary-light);
+  opacity: 0;
+  transform: scaleY(0.65);
+  transition: opacity 0.18s ease, transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
 .nav-item:hover {
   background: var(--glass-bg-hover);
   color: var(--text-primary);
@@ -477,13 +546,22 @@ const navItems = [
 }
 
 .nav-item.active::before {
-  content: '';
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.sidenav-items .nav-item::before {
+  display: none;
+}
+
+.nav-unread-badge {
   position: absolute;
-  left: -8px;
-  width: 3px;
-  height: 20px;
-  background: var(--primary-light);
-  border-radius: 0 3px 3px 0;
+  top: 2px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 9px;
 }
 
 :root[data-theme="light"] .nav-item.active::before {
@@ -494,5 +572,23 @@ const navItems = [
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.nav-item.active .nav-icon {
+  transform: scale(1.04);
+}
+
+.nav-item:active .nav-icon {
+  transform: scale(0.94);
+}
+
+.check-mark {
+  animation: selection-check-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes selection-check-in {
+  from { opacity: 0; transform: scale(0.7); }
+  to { opacity: 1; transform: scale(1); }
 }
 </style>

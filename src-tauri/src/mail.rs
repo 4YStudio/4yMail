@@ -1,13 +1,51 @@
 use imap;
 use native_tls::{TlsConnector, TlsStream};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{SmtpTransport, Transport, Message as LettreMessage};
 use lettre::message::{header::ContentType, MultiPart, SinglePart, Attachment, Mailbox};
 use mail_parser::MimeHeaders;
 
+/// 建立 TCP 连接（含 TLS 前握手）的超时
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 会话期读写超时
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ========== 数据类型 ==========
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ProxyConfig {
+    /// "socks5" | "http"
+    #[serde(default)]
+    pub scheme: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub pass: String,
+}
+
+impl ProxyConfig {
+    fn usable(&self) -> bool {
+        !self.host.trim().is_empty() && self.port != 0
+    }
+
+    fn is_socks(&self) -> bool {
+        let s = self.scheme.to_ascii_lowercase();
+        !s.contains("http")
+    }
+
+    fn label(&self) -> String {
+        format!("{}:{}（{}）", self.host, self.port, self.scheme)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ImapConfig {
@@ -17,6 +55,9 @@ pub struct ImapConfig {
     pub pass: String,
     #[serde(default = "default_true")]
     pub secure: bool,
+    /// 可选的网络代理（SOCKS5 / HTTP CONNECT）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
 }
 
 fn default_true() -> bool { true }
@@ -29,6 +70,8 @@ pub struct SmtpConfig {
     pub pass: String,
     #[serde(default = "default_true")]
     pub secure: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -178,6 +221,305 @@ fn decode_header(s: Option<&[u8]>) -> String {
     String::new()
 }
 
+// ========== 网络层：直连 / SOCKS5 / HTTP CONNECT ==========
+
+/// 连接被重置时的说明。
+///
+/// 993 / 995 / 465 这类「隐式 TLS」邮件端口在校园网、公司网、部分运营商上会被
+/// 中间设备直接 RST（表现：TCP 能连上，一发数据就被重置）。这与账号、密码、
+/// 证书都无关，在应用层无法绕过，只能换网络或走代理。
+fn reset_hint(host: &str, port: u16) -> String {
+    format!(
+        "连接被网络重置（{host}:{port}）。\n\
+         这类加密邮件端口（993/995/465）常被校园网、公司网或运营商拦截：TCP 能建立，\
+         但一到 TLS 握手就被掐断，与账号密码无关。可以尝试：\n\
+         ① 换网络（手机热点）验证；\n\
+         ② 在代理软件里开启 TUN / 全局模式；\n\
+         ③ 在账户设置里填写 SOCKS5 或 HTTP 代理（推荐）。",
+        host = host,
+        port = port
+    )
+}
+
+fn is_reset_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::ConnectionReset
+        || err.kind() == std::io::ErrorKind::ConnectionAborted
+        || err.raw_os_error() == Some(104)
+}
+
+fn describe_io_error(host: &str, port: u16, err: &std::io::Error, during: &str) -> String {
+    if is_reset_error(err) {
+        reset_hint(host, port)
+    } else {
+        format!("{}失败（{}:{}）: {}", during, host, port, err)
+    }
+}
+
+/// 把 IMAP 登录错误翻译成用户能看懂的提示
+fn login_error(err: &imap::error::Error) -> String {
+    let text = err.to_string();
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("authenticationfailed") || lower.contains("login failed") {
+        return format!(
+            "IMAP 登录被拒绝：{}。\n\
+             QQ / 163 / 126 等国内邮箱不能用登录密码，需要在网页端开启 IMAP 服务并生成\
+             「授权码」（QQ 邮箱：设置 → 账号 → POP3/IMAP/SMTP 服务），把授权码当密码填进来。",
+            text
+        );
+    }
+    if lower.contains("disable") || lower.contains("not enabled") {
+        return format!(
+            "IMAP 登录被拒绝：{}。\n该邮箱可能未开启 IMAP 服务，请先到网页版设置里开启（QQ 邮箱：设置 → 账号 → POP3/IMAP/SMTP 服务）。",
+            text
+        );
+    }
+    format!("IMAP 登录失败: {}", text)
+}
+
+fn connect_direct(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("解析服务器地址 {} 失败: {}", host, e))?;
+    let mut last_err: Option<std::io::Error> = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match last_err {
+        Some(e) => Err(describe_io_error(host, port, &e, "TCP 连接")),
+        None => Err(format!("服务器 {}:{} 没有可用地址", host, port)),
+    }
+}
+
+fn socks5_handshake(
+    stream: &mut TcpStream,
+    host: &str,
+    port: u16,
+    user: &str,
+    pass: &str,
+) -> Result<(), String> {
+    let proxy_label = "代理";
+    let use_auth = !user.is_empty();
+    let methods: Vec<u8> = if use_auth { vec![0x00, 0x02] } else { vec![0x00] };
+
+    let mut greeting = vec![0x05u8, methods.len() as u8];
+    greeting.extend_from_slice(&methods);
+    stream
+        .write_all(&greeting)
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 问候"))?;
+
+    let mut resp = [0u8; 2];
+    stream
+        .read_exact(&mut resp)
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 问候应答"))?;
+    if resp[0] != 0x05 {
+        return Err("代理没有返回 SOCKS5 协议，请检查代理类型与端口是否正确".to_string());
+    }
+
+    match resp[1] {
+        0x00 => {}
+        0x02 => {
+            let ub = user.as_bytes();
+            let pb = pass.as_bytes();
+            if ub.len() > 255 || pb.len() > 255 {
+                return Err("代理用户名或密码过长".to_string());
+            }
+            let mut auth = vec![0x01u8, ub.len() as u8];
+            auth.extend_from_slice(ub);
+            auth.push(pb.len() as u8);
+            auth.extend_from_slice(pb);
+            stream
+                .write_all(&auth)
+                .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 认证"))?;
+            let mut ar = [0u8; 2];
+            stream
+                .read_exact(&mut ar)
+                .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 认证应答"))?;
+            if ar[1] != 0x00 {
+                return Err("SOCKS5 认证失败（用户名或密码错误）".to_string());
+            }
+        }
+        0xff => return Err("代理拒绝了所有认证方式".to_string()),
+        m => return Err(format!("代理要求不支持的认证方式: 0x{:02x}", m)),
+    }
+
+    let host_bytes = host.as_bytes();
+    if host_bytes.len() > 255 {
+        return Err("服务器域名过长".to_string());
+    }
+    let mut request = vec![0x05u8, 0x01, 0x00, 0x03, host_bytes.len() as u8];
+    request.extend_from_slice(host_bytes);
+    request.extend_from_slice(&port.to_be_bytes());
+    stream
+        .write_all(&request)
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 CONNECT"))?;
+
+    let mut head = [0u8; 4];
+    stream
+        .read_exact(&mut head)
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 CONNECT 应答"))?;
+    if head[1] != 0x00 {
+        let reason = match head[1] {
+            0x01 => "代理内部错误",
+            0x02 => "规则不允许该连接",
+            0x03 => "网络不可达",
+            0x04 => "主机不可达",
+            0x05 => "目标拒绝连接",
+            0x06 => "TTL 过期",
+            0x07 => "不支持的命令",
+            0x08 => "不支持的地址类型",
+            _ => "未知错误",
+        };
+        return Err(format!(
+            "代理拒绝连接 {}:{}（{}，code {}）",
+            host, port, reason, head[1]
+        ));
+    }
+
+    // 跳过代理返回的绑定地址
+    let skip = match head[3] {
+        0x01 => 4,
+        0x04 => 16,
+        0x03 => {
+            let mut len = [0u8; 1];
+            stream
+                .read_exact(&mut len)
+                .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 应答"))?;
+            len[0] as usize
+        }
+        _ => 0,
+    };
+    let mut drain = vec![0u8; skip + 2];
+    stream
+        .read_exact(&mut drain)
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "SOCKS5 应答"))?;
+    Ok(())
+}
+
+fn http_connect_handshake(
+    stream: &mut TcpStream,
+    host: &str,
+    port: u16,
+    user: &str,
+    pass: &str,
+) -> Result<(), String> {
+    let proxy_label = "代理";
+    let mut request = format!(
+        "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: keep-alive\r\n",
+        host, port, host, port
+    );
+    if !user.is_empty() {
+        use base64::Engine;
+        let token = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", user, pass));
+        request.push_str(&format!("Proxy-Authorization: Basic {}\r\n", token));
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| describe_io_error(proxy_label, 0, &e, "HTTP CONNECT"))?;
+
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        match stream.read(&mut byte) {
+            Ok(0) => return Err("代理在 HTTP CONNECT 阶段关闭了连接".to_string()),
+            Ok(_) => {
+                buf.push(byte[0]);
+                if buf.len() >= 4 && &buf[buf.len() - 4..] == b"\r\n\r\n" {
+                    break;
+                }
+                if buf.len() > 16 * 1024 {
+                    return Err("代理返回的响应头过长".to_string());
+                }
+            }
+            Err(e) => return Err(describe_io_error(proxy_label, 0, &e, "HTTP CONNECT 应答")),
+        }
+    }
+
+    let head = String::from_utf8_lossy(&buf).to_string();
+    let status_line = head.lines().next().unwrap_or_default().to_string();
+    let code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse::<u16>().ok());
+    match code {
+        Some(200) => Ok(()),
+        Some(407) => Err("代理需要认证（407），请填写用户名和密码".to_string()),
+        Some(c) => Err(format!("代理拒绝连接 {}:{}（HTTP {}）", host, port, c)),
+        None => Err(format!("代理返回了无法解析的响应: {}", status_line)),
+    }
+}
+
+/// 建立到 `host:port` 的 TCP 连接；配置了代理则先穿过代理。
+fn open_tcp(
+    proxy: &Option<ProxyConfig>,
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<TcpStream, String> {
+    let proxy = match proxy.as_ref().filter(|p| p.usable()) {
+        Some(p) => p,
+        None => return connect_direct(host, port, timeout),
+    };
+
+    let mut stream = connect_direct(&proxy.host, proxy.port, timeout)
+        .map_err(|e| format!("连接代理 {} 失败: {}", proxy.label(), e))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| format!("设置代理超时失败: {}", e))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|e| format!("设置代理超时失败: {}", e))?;
+
+    if proxy.is_socks() {
+        socks5_handshake(&mut stream, host, port, &proxy.user, &proxy.pass)?;
+    } else {
+        http_connect_handshake(&mut stream, host, port, &proxy.user, &proxy.pass)?;
+    }
+    Ok(stream)
+}
+
+/// 给 lettre 用的本地隧道：lettre 只能自己建连，所以我们在本地开一个
+/// 127.0.0.1:随机端口，把连接经代理转发到真实的 SMTP 服务器。
+fn spawn_tunnel(proxy: ProxyConfig, host: String, port: u16) -> Result<u16, String> {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动本地代理隧道失败: {}", e))?;
+    let local_port = listener
+        .local_addr()
+        .map_err(|e| format!("读取本地隧道端口失败: {}", e))?
+        .port();
+
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(client) = incoming else { continue };
+            let host = host.clone();
+            let proxy = proxy.clone();
+            std::thread::spawn(move || {
+                let upstream = match open_tcp(&Some(proxy), &host, port, CONNECT_TIMEOUT) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let (Ok(mut up_read), Ok(mut cl_read)) =
+                    (upstream.try_clone(), client.try_clone())
+                else {
+                    return;
+                };
+                let mut up_write = upstream;
+                let mut cl_write = client;
+                let pump = std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut up_read, &mut cl_write);
+                });
+                let _ = std::io::copy(&mut cl_read, &mut up_write);
+                let _ = pump.join();
+            });
+        }
+    });
+
+    Ok(local_port)
+}
+
 // ========== 邮件连接 ==========
 
 #[derive(Debug)]
@@ -187,37 +529,101 @@ pub struct MailConnection {
     pub config: ImapConfig,
 }
 
+#[derive(Debug, PartialEq)]
+enum ConnectStage {
+    Tcp,
+    Tls,
+    Login,
+}
+
+struct ConnectAttempt {
+    port: u16,
+    implicit_tls: bool,
+}
+
 impl MailConnection {
     pub fn connect(config: &ImapConfig) -> Result<Self, String> {
         let tls = TlsConnector::builder()
             .build()
             .map_err(|e| format!("TLS 初始化失败: {}", e))?;
 
-        let addr = (config.host.as_str(), config.port);
-        // 核心修复：增加 IO 超时，防止死锁
-        let timeout = std::time::Duration::from_secs(10);
-        let socket_addr = addr.to_socket_addrs()
-            .map_err(|e| format!("解析 IMAP 服务器地址失败: {}", e))?
-            .next()
-            .ok_or_else(|| "IMAP 服务器没有可用地址".to_string())?;
-        let tcp_stream = std::net::TcpStream::connect_timeout(&socket_addr, timeout)
-            .map_err(|e| format!("TCP 连接超时: {}", e))?;
-        tcp_stream.set_read_timeout(Some(timeout)).map_err(|e| format!("设置读取超时失败: {}", e))?;
-        tcp_stream.set_write_timeout(Some(timeout)).map_err(|e| format!("设置写入超时失败: {}", e))?;
+        let mut attempts = vec![ConnectAttempt {
+            port: config.port,
+            implicit_tls: config.secure,
+        }];
+        // 993 常被网络拦截，而 143 通常放行：失败时回退到 143 + STARTTLS
+        // （QQ 不做 STARTTLS，但 163、Gmail、自建服务器等大多支持）。
+        if config.secure && config.port == 993 {
+            attempts.push(ConnectAttempt {
+                port: 143,
+                implicit_tls: false,
+            });
+        }
 
-        let session = if config.secure {
-            let tls_stream = tls.connect(&config.host, tcp_stream)
-                .map_err(|e| format!("TLS 握手失败: {}", e))?;
+        let mut errors: Vec<String> = Vec::new();
+        for attempt in &attempts {
+            match Self::try_connect(config, &tls, attempt) {
+                Ok(conn) => return Ok(conn),
+                Err((stage, message)) => {
+                    let multi = attempts.len() > 1;
+                    errors.push(if multi {
+                        format!("端口 {}：{}", attempt.port, message)
+                    } else {
+                        message
+                    });
+                    // 账号密码错误没必要换端口重试
+                    if stage == ConnectStage::Login {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Err(errors.join("\n"))
+    }
+
+    fn try_connect(
+        config: &ImapConfig,
+        tls: &TlsConnector,
+        attempt: &ConnectAttempt,
+    ) -> Result<Self, (ConnectStage, String)> {
+        let stream = open_tcp(&config.proxy, &config.host, attempt.port, CONNECT_TIMEOUT)
+            .map_err(|e| (ConnectStage::Tcp, e))?;
+        stream
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .map_err(|e| (ConnectStage::Tcp, format!("设置读取超时失败: {}", e)))?;
+        stream
+            .set_write_timeout(Some(IO_TIMEOUT))
+            .map_err(|e| (ConnectStage::Tcp, format!("设置写入超时失败: {}", e)))?;
+
+        let session = if attempt.implicit_tls {
+            let tls_stream = tls.connect(&config.host, stream).map_err(|e| {
+                let text = e.to_string();
+                let wrapped = if text.to_ascii_lowercase().contains("reset") {
+                    reset_hint(&config.host, attempt.port)
+                } else {
+                    format!("TLS 握手失败（{}:{}）: {}", config.host, attempt.port, text)
+                };
+                (ConnectStage::Tls, wrapped)
+            })?;
             let client = imap::Client::new(tls_stream);
-            client.login(&config.user, &config.pass)
-                .map_err(|(e, _)| format!("IMAP 登录失败: {}", e))?
+            client
+                .login(&config.user, &config.pass)
+                .map_err(|(e, _)| (ConnectStage::Login, login_error(&e)))?
         } else {
-            // STARTTLS 稍微复杂一点，先用普通 client 建立连接并发送 STARTTLS
-            let client = imap::Client::new(tcp_stream);
-            let tls_client = client.secure(&config.host, &tls)
-                .map_err(|e| format!("STARTTLS 升级失败: {}", e))?;
-            tls_client.login(&config.user, &config.pass)
-                .map_err(|(e, _)| format!("IMAP 登录失败: {}", e))?
+            let client = imap::Client::new(stream);
+            let tls_client = client.secure(&config.host, tls).map_err(|e| {
+                (
+                    ConnectStage::Tls,
+                    format!(
+                        "STARTTLS 升级失败（{}:{}）: {}（该服务器可能不支持 143 端口加密）",
+                        config.host, attempt.port, e
+                    ),
+                )
+            })?;
+            tls_client
+                .login(&config.user, &config.pass)
+                .map_err(|(e, _)| (ConnectStage::Login, login_error(&e)))?
         };
 
         Ok(MailConnection {
@@ -661,20 +1067,218 @@ pub fn send_mail(smtp_config: &SmtpConfig, mail_options: &MailOptions) -> Result
 
     let creds = Credentials::new(smtp_config.user.clone(), smtp_config.pass.clone());
 
-    let mailer = if smtp_config.secure && smtp_config.port == 465 {
-        SmtpTransport::relay(&smtp_config.host)
-            .map_err(|e| format!("SMTP 连接失败: {}", e))?
-            .port(smtp_config.port)
-            .credentials(creds)
-            .build()
-    } else {
-        SmtpTransport::starttls_relay(&smtp_config.host)
-            .map_err(|e| format!("SMTP 连接失败: {}", e))?
-            .port(smtp_config.port)
-            .credentials(creds)
-            .build()
+    // 主端口优先，失败后在 465（隐式 TLS）与 587（STARTTLS）之间回退。
+    // 465 在很多网络里被直接 RST，而 587 通常放行。
+    let primary_implicit = smtp_config.secure && smtp_config.port == 465;
+    let mut attempts: Vec<(u16, bool)> = vec![(smtp_config.port, primary_implicit)];
+    let fallback_port = if smtp_config.port == 465 { 587 } else { 465 };
+    attempts.push((fallback_port, fallback_port == 465));
+
+    let mut errors: Vec<String> = Vec::new();
+    for (port, implicit_tls) in attempts {
+        match build_smtp_transport(smtp_config, &creds, port, implicit_tls) {
+            Ok(mailer) => match mailer.send(&email) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let text = e.to_string();
+                    let hint = if text.to_ascii_lowercase().contains("reset") {
+                        reset_hint(&smtp_config.host, port)
+                    } else {
+                        format!("发送失败（{}:{}）: {}", smtp_config.host, port, text)
+                    };
+                    errors.push(format!("端口 {}：{}", port, hint));
+                    // 认证错误、收件人被拒等业务错误不必换端口重试
+                    if !is_transport_error(&text) {
+                        break;
+                    }
+                }
+            },
+            Err(e) => {
+                errors.push(format!("端口 {}：{}", port, e));
+            }
+        }
+    }
+
+    Err(errors.join("\n"))
+}
+
+/// 粗粒度判断是不是传输层（网络/TLS）错误，决定要不要换端口重试
+fn is_transport_error(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "reset",
+        "broken pipe",
+        "timed out",
+        "timeout",
+        "connection refused",
+        "network is unreachable",
+        "tls",
+        "handshake",
+        "unexpected eof",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+/// 构建 SMTP 传输：可选走代理（本地隧道）+ 显式指定 TLS 模式
+fn build_smtp_transport(
+    smtp_config: &SmtpConfig,
+    creds: &Credentials,
+    port: u16,
+    implicit_tls: bool,
+) -> Result<SmtpTransport, String> {
+    let tls_params = TlsParameters::builder(smtp_config.host.clone())
+        .build()
+        .map_err(|e| format!("TLS 初始化失败: {}", e))?;
+
+    let (server, connect_port) = match smtp_config.proxy.as_ref().filter(|p| p.usable()) {
+        Some(proxy) => {
+            let local_port = spawn_tunnel(proxy.clone(), smtp_config.host.clone(), port)?;
+            ("127.0.0.1".to_string(), local_port)
+        }
+        None => (smtp_config.host.clone(), port),
     };
 
-    mailer.send(&email).map_err(|e| format!("发送失败: {}", e))?;
-    Ok(())
+    let builder = SmtpTransport::builder_dangerous(server)
+        .port(connect_port)
+        .credentials(creds.clone())
+        .timeout(Some(Duration::from_secs(30)));
+
+    let builder = if implicit_tls {
+        builder.tls(Tls::Wrapper(tls_params))
+    } else {
+        builder.tls(Tls::Required(tls_params))
+    };
+
+    Ok(builder.build())
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+
+    /// 一个最小 SOCKS5 服务器：不做认证，接受 CONNECT 后回 "PONG"
+    fn spawn_mock_socks5(user: Option<(&'static str, &'static str)>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = [0u8; 2];
+            stream.read_exact(&mut head).unwrap();
+            let mut methods = vec![0u8; head[1] as usize];
+            stream.read_exact(&mut methods).unwrap();
+            match user {
+                None => stream.write_all(&[0x05, 0x00]).unwrap(),
+                Some(_) => {
+                    stream.write_all(&[0x05, 0x02]).unwrap();
+                    let mut auth_head = [0u8; 2];
+                    stream.read_exact(&mut auth_head).unwrap();
+                    let mut u = vec![0u8; auth_head[1] as usize];
+                    stream.read_exact(&mut u).unwrap();
+                    let mut plen = [0u8; 1];
+                    stream.read_exact(&mut plen).unwrap();
+                    let mut p = vec![0u8; plen[0] as usize];
+                    stream.read_exact(&mut p).unwrap();
+                    stream.write_all(&[0x05, 0x00]).unwrap();
+                }
+            }
+            // CONNECT 请求
+            let mut req_head = [0u8; 4];
+            stream.read_exact(&mut req_head).unwrap();
+            assert_eq!(req_head[3], 0x03, "只测域名形式的 CONNECT");
+            let mut host_len = [0u8; 1];
+            stream.read_exact(&mut host_len).unwrap();
+            let mut host = vec![0u8; host_len[0] as usize];
+            stream.read_exact(&mut host).unwrap();
+            let mut tail = [0u8; 2];
+            stream.read_exact(&mut tail).unwrap();
+            // 成功应答：BND.ADDR = 127.0.0.1:0
+            stream
+                .write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0])
+                .unwrap();
+            stream.write_all(b"PONG").unwrap();
+        });
+        port
+    }
+
+    #[test]
+    fn socks5_no_auth() {
+        let port = spawn_mock_socks5(None);
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        socks5_handshake(&mut stream, "imap.qq.com", 993, "", "").unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"PONG");
+    }
+
+    #[test]
+    fn socks5_with_password() {
+        let port = spawn_mock_socks5(Some(("user", "pass")));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        socks5_handshake(&mut stream, "imap.qq.com", 993, "user", "pass").unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"PONG");
+    }
+
+    fn spawn_mock_http_proxy() -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\nPONG")
+                .unwrap();
+            request
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn http_connect_with_basic_auth() {
+        let (port, handle) = spawn_mock_http_proxy();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        http_connect_handshake(&mut stream, "imap.qq.com", 993, "user", "pass").unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"PONG");
+        let request = handle.join().unwrap();
+        assert!(request.starts_with("CONNECT imap.qq.com:993 HTTP/1.1"));
+        assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
+    }
+
+    #[test]
+    fn http_connect_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let _ = stream.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
+        });
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let err = http_connect_handshake(&mut stream, "imap.qq.com", 993, "", "").unwrap_err();
+        assert!(err.contains("407"), "unexpected: {}", err);
+    }
+
+    #[test]
+    fn reset_error_says_network_blocked() {
+        let err = std::io::Error::from_raw_os_error(104);
+        let msg = describe_io_error("imap.qq.com", 993, &err, "TCP 连接");
+        assert!(msg.contains("连接被网络重置"));
+        assert!(msg.contains("993"));
+    }
 }

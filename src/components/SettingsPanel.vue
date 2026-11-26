@@ -40,7 +40,7 @@
               v-for="acc in accounts"
               :key="acc.id"
               class="account-card"
-              @click="editingAccount = { ...acc }; isEditing = true; originalId = acc.id"
+              @click="editAccount(acc)"
             >
               <div class="acc-info">
                 <div class="acc-details">
@@ -188,6 +188,42 @@
             </div>
           </div>
 
+          <div class="settings-section">
+            <h4 class="section-title">网络代理（可选）</h4>
+            <div class="field-group">
+              <div class="field-row">
+                <div class="field small">
+                  <label>类型</label>
+                  <GlassSelect
+                    v-model="editingAccount.proxy.scheme"
+                    :options="proxyOptions"
+                  />
+                </div>
+                <div class="field">
+                  <label>代理地址</label>
+                  <input v-model="editingAccount.proxy.host" placeholder="127.0.0.1" :disabled="!editingAccount.proxy.scheme" />
+                </div>
+                <div class="field small">
+                  <label>端口</label>
+                  <input v-model.number="editingAccount.proxy.port" type="number" :disabled="!editingAccount.proxy.scheme" />
+                </div>
+              </div>
+              <div class="field-row" v-if="editingAccount.proxy.scheme">
+                <div class="field">
+                  <label>用户名</label>
+                  <input v-model="editingAccount.proxy.user" placeholder="可选" />
+                </div>
+                <div class="field">
+                  <label>密码</label>
+                  <input type="password" v-model="editingAccount.proxy.pass" placeholder="可选" />
+                </div>
+              </div>
+              <p class="field-hint">
+                IMAP 与 SMTP 都会经此代理连接。当 993 / 465 端口被校园网、公司网拦截（连接被重置）时，填上代理即可正常收发。
+              </p>
+            </div>
+          </div>
+
           <div class="settings-actions">
             <button class="btn-primary" :disabled="connectingIds.includes(editingAccount.id)" @click="handleAction">
               {{ connectingIds.includes(editingAccount.id) ? '正在连接...' : (!isEditing ? '添加并连接' : '保存并重连') }}
@@ -326,6 +362,16 @@ const secureOptions = [
   { label: 'STARTTLS / 无', value: false }
 ]
 
+const proxyOptions = [
+  { label: '不使用', value: '' },
+  { label: 'SOCKS5', value: 'socks5' },
+  { label: 'HTTP', value: 'http' }
+]
+
+function emptyProxy() {
+  return { scheme: '', host: '127.0.0.1', port: 1080, user: '', pass: '' }
+}
+
 const props = defineProps({
   accounts: Array,
   pollingInterval: Number,
@@ -355,17 +401,49 @@ function handleCreateNew() {
     id: '',
     imap: { host: '', port: 993, secure: true, user: '', pass: '' },
     smtp: { host: '', port: 465, secure: true, user: '', pass: '' },
+    proxy: emptyProxy(),
     connected: false
   }
 }
 
+function editAccount(acc) {
+  // 深拷贝，避免编辑时直接改到父组件的账号对象
+  const copy = JSON.parse(JSON.stringify(acc))
+  const existing = copy.imap?.proxy || copy.smtp?.proxy
+  copy.proxy = existing
+    ? {
+        scheme: existing.scheme || 'socks5',
+        host: existing.host || '127.0.0.1',
+        port: existing.port || 1080,
+        user: existing.user || '',
+        pass: existing.pass || ''
+      }
+    : emptyProxy()
+  editingAccount.value = copy
+  isEditing.value = true
+  originalId = acc.id
+}
+
 function handleAction() {
   if (!editingAccount.value.imap.user) return
-  editingAccount.value.id = editingAccount.value.imap.user
-  if (!isEditing.value) {
-    emit('addAccount', JSON.parse(JSON.stringify(editingAccount.value)))
+  const account = JSON.parse(JSON.stringify(editingAccount.value))
+  account.id = account.imap.user
+
+  // 代理是账号级的，写进 imap / smtp 两份配置
+  const proxy = account.proxy
+  delete account.proxy
+  if (proxy && proxy.scheme && proxy.host && proxy.port) {
+    account.imap.proxy = { ...proxy }
+    account.smtp.proxy = { ...proxy }
   } else {
-    emit('updateAccount', originalId, JSON.parse(JSON.stringify(editingAccount.value)))
+    delete account.imap.proxy
+    delete account.smtp.proxy
+  }
+
+  if (!isEditing.value) {
+    emit('addAccount', account)
+  } else {
+    emit('updateAccount', originalId, account)
   }
   editingAccount.value = null
 }
@@ -864,6 +942,18 @@ function handleOpenDevtools() {
 .field input:focus {
   border-color: var(--primary);
   outline: none;
+}
+
+.field input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.field-hint {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
 }
 
 .input-with-hint {

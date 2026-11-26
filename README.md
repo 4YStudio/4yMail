@@ -97,16 +97,48 @@ pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm
 ```
 
 > [!NOTE]
-> **Linux 动画/s 闪烁相关**：应用启动时会默认设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`
-> （WebKitGTK ≥ 2.42 的 DMABUF renderer 在 AMD/NVIDIA + Wayland 上会让每个动画
-> 首尾闪一帧旧画面）。想要回 WebKit 默认的 DMABUF 路径可以：
+> **关于 Linux 上曾有过的「动画闪烁」**：以前这个应用在启动时会默认设置
+> `WEBKIT_DISABLE_DMABUF_RENDERER=1` 来压动画闪烁。那是误判（当时的环境是 Debian 13 +
+> KDE 6 + Wayland，问题出在该环境的 WebKitGTK webview，与本应用无关），已经回退：
+> 现在**不设任何 `WEBKIT_*` 变量**，走 Tauri / WebKitGTK 默认配置，保留硬件加速合成。
+> 如果某台 Linux 机器上自己遇到类似现象，用环境变量临时验证即可（不要写回代码）：
 >
 > ```sh
-> FOURYMAIL_WEBKIT_RENDERER=dmabuf 4ymail   # 或 gpu / default
-> FOURYMAIL_WEBKIT_RENDERER=soft 4ymail     # 连加速合成一起关（仅排查用）
+> WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+> WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 pnpm tauri dev
 > ```
 >
-> 成因、代价与量化验证方式见 [docs/tauri-webkitgtk-flicker.md](./docs/tauri-webkitgtk-flicker.md)。
+> 历史排查记录保留在 [docs/tauri-webkitgtk-flicker.md](./docs/tauri-webkitgtk-flicker.md)
+> （开头已标注结论不成立）。
+
+---
+
+### 🌐 连不上邮件服务器？（993 / 465 被拦截）
+
+如果连 QQ / 163 / Gmail 等邮箱时提示「连接被重置」「TLS 握手失败」，先不要怀疑账号密码。
+这类**隐式 TLS** 邮件端口（IMAP 993、SMTP 465、POP3 995）在国内的校园网、公司网、
+部分运营商上会被中间设备直接 RST：TCP 能建立，但一发 TLS 握手就被掐断。
+
+一条命令就能确认（在终端里跑，不是应用的问题就一定也被重置）：
+
+```sh
+# 正常：打印证书信息；被拦截：write:errno=104
+openssl s_client -connect imap.qq.com:993 -servername imap.qq.com </dev/null | head -5
+# 对照：587 / 143 一般不受影响
+openssl s_client -connect smtp.qq.com:587 -starttls smtp -servername smtp.qq.com </dev/null | head -5
+```
+
+应用内置的应对：
+
+1. **网络代理**：账号编辑页底部「网络代理（可选）」支持 **SOCKS5** 与 **HTTP CONNECT**，
+   IMAP 与 SMTP 都会经代理连接（带用户名 / 密码认证）。填上代理软件的本地混合端口即可，
+   例如 Clash Verge / FlClash 的 `127.0.0.1:7890`（需在代理软件里开启「混合端口」或「允许局域网」）。
+2. **端口回退**：SMTP 465 失败会自动再试 587（STARTTLS）；IMAP 993 失败会再试 143
+   （STARTTLS，QQ 不支持但 163 / Gmail / 自建服务器大多支持）。
+3. **报错会说人话**：被 RST 时直接给出「连接被网络重置」和解决思路，而不是一句 `Connection reset by peer`。
+
+> 代理软件的「系统代理」模式只影响读 `http_proxy` 环境变量的程序（浏览器、curl 等），
+> 不会接管邮件客户端的裸 TCP 连接。要么用本应用内置的代理设置，要么开 TUN / 虚拟网卡模式。
 
 ---
 
@@ -132,8 +164,8 @@ GitHub Actions 会在推送 `main`、开 PR、手动触发以及打 `v*` tag 时
 
 ### 📝 Changelog / 更新日志
 
-见 [CHANGELOG.md](./CHANGELOG.md)。当前版本 **1.2.0**：默认关闭 WebKitGTK DMABUF
-renderer 修复动画闪烁、仓库改为纯 Tauri 结构、五平台 CI 打包。
+见 [CHANGELOG.md](./CHANGELOG.md)。当前版本 **1.2.1**：新增网络代理（SOCKS5 / HTTP）与
+SMTP 465→587、IMAP 993→143 端口回退，连接被重置时给出明确原因；修复说明见 1.2.0。
 
 ---
 

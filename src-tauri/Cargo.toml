@@ -1,6 +1,6 @@
 [package]
 name = "forymail"
-version = "1.2.0"
+version = "1.2.1"
 description = "A modern, glassmorphism-style email client."
 authors = ["Henvei"]
 edition = "2021"

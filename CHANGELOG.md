@@ -4,6 +4,35 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 更早的版本见 [GitHub Releases](https://github.com/4YStudio/4yMail/releases)。
 
+## [1.2.1] - 2026-11-26
+
+### 新增
+
+- **网络代理**：账号设置新增「网络代理（可选）」，支持 **SOCKS5** 与 **HTTP CONNECT**
+  （可带用户名/密码），IMAP 与 SMTP 均经代理连接。用于 993 / 465 等加密邮件端口被网络
+  拦截的场景。SMTP 部分通过本地隧道转发，TLS 仍以真实服务器域名校验。
+- **端口自动回退**：SMTP 465 失败后自动重试 587（STARTTLS）；IMAP 993 失败后自动重试
+  143（STARTTLS，QQ 不支持但 163 / Gmail / 自建服务器大多支持）。
+- 测试：新增 SOCKS5 / HTTP CONNECT 握手的单元测试（含认证与 407 拒绝路径）。
+
+### 修复
+
+- **连接被重置时报错看不懂**：之前统一报 `TLS 握手失败: Connection reset by peer`。
+  现在会明确告诉用户这是网络拦截（993/995/465 隐式 TLS 端口被校园网/公司网 RST），
+  并给出三个出路（换网络 / 开 TUN / 填代理），与账号密码无关。
+- IMAP 登录被拒时提示 QQ/163/126 需要使用「授权码」而不是登录密码。
+- **回退 WebView 渲染器的环境变量注入**：之前默认注入 `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+  来压动画闪烁，属于误判 —— 问题出在特定 Linux 环境（Debian 13 + KDE 6 + Wayland）的
+  WebKitGTK webview，不是应用也不是 Tauri 的通用行为，而那条开关代价是丢掉硬件加速合成、
+  全局掉帧。现在 `src-tauri/src/main.rs` **不再设置任何 `WEBKIT_*` 变量**，走 Tauri /
+  WebKitGTK 默认配置；`FOURYMAIL_WEBKIT_RENDERER` 开关随之移除，需要时用环境变量临时验证。
+
+### 文档
+
+- `docs/tauri-webkitgtk-flicker.md` 标注结论已被推翻，仅作排查过程存档。
+- README 新增「连不上邮件服务器？（993 / 465 被拦截）」一节，含一条 `openssl s_client`
+  自检命令。
+
 ## [1.2.0] - 2026-11-24
 
 本次发布是一次结构收敛 + 一个长期困扰的渲染问题的根治。

@@ -261,17 +261,15 @@ button:active {
 
 /* === 路由/页面切换核心动画 ===
  *
- * 闪烁的真正成因不在 CSS：WebKitGTK ≥ 2.42 的 DMABUF renderer 在 AMD/NVIDIA +
- * Wayland 上会短暂显示图层的陈旧表面，任何动画的首尾都会抖一下。已在
- * src-tauri/src/main.rs 里默认关掉（WEBKIT_DISABLE_DMABUF_RENDERER=1）。
- * 详见 docs/tauri-webkitgtk-flicker.md。
+ * 这里没有为「动画闪烁」做任何特殊处理：当时把它归因于 WebKitGTK 的 DMABUF renderer，
+ * 是误判（实际是 Debian 13 + KDE 6 + Wayland 上该环境 webview 的问题）。应用已回退到
+ * Tauri/WebKitGTK 默认配置，不再设置任何 WEBKIT_* 环境变量。
  *
- * 关掉 DMABUF 后走共享内存 + Cairo：每帧成本与像素量成正比（2× 缩放下约
- * 30–40 fps），所以这里的规则只剩三条要求：
- *   1. 时长压在 160–220 ms（帧少，但肉眼是顺的；超过 300 ms 会明显发顿）；
+ * 剩下的只是常规定时与合成层卫生：
+ *   1. 进场时长 160–220 ms；
  *   2. 一次只让一个容器动（mode="out-in" 保证同一时刻只有一个视图在 DOM 里）；
  *   3. 不给静止元素挂常驻的 will-change / translateZ(0) / contain: paint ——
- *      那样每帧都要重新上传整个图层，帧率反而更低，也更容易闪。
+ *      那会把图层长期提升，每帧重新上传整个图层，得不偿失。
  */
 
 /* 视图是同一层上的绝对定位盒子：切换期间不参与父级 flex 重排，
@@ -291,10 +289,9 @@ button:active {
   overflow: hidden;
 }
 
-/* 进场只做位移，180 ms（30 fps 下大约 5–6 帧）。
+/* 进场只做位移，180 ms。
  * 不带 opacity：opacity 动画会把元素提升成独立图层，结束再回收，
- * 又是一次不必要的图层状态变化。
- * 位移量比原来小一半：大位移每帧要重新栅格化的面积更大，低配机上容易掉帧。 */
+ * 是一次不必要的图层状态变化。 */
 .route-slide-enter-active,
 .route-compose-enter-active,
 .route-settings-enter-active {
